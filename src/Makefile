@@ -1,70 +1,64 @@
-# CS165 MakeFile
-# This file includes automatic dependency tracking
-# Please see example of "utils" to see how to add additional file
-# to your project
+# CS165 Makefile (C++ Version)
 
+# Target executables
 all: client server
 
-# C-compiler settings
-CC = gcc -std=c99 -g -ggdb3
+# C++ compiler settings
+CXX = g++
+CXXFLAGS = -std=c++17 -g -ggdb3 -Wall -Wextra -pedantic -pthread -O$(O) -I$(INCLUDES)
 
 # Default optimization level
 O ?= 0
 
-# Flags and other libraries
-override CFLAGS += -Wall -Wextra -pedantic -pthread -O$(O) -I$(INCLUDES)
+# Linker flags and libraries
 LDFLAGS =
 LIBS =
+
+# Include directory
 INCLUDES = include
 
+# Unix socket path (escaped for makefile format)
+SOCK_PATH = \"/tmp/cs165_unix_socket\"
 
-# this is the DB server and client's unix socket path
-# Note: the extra backslash is for escaping the quotes for makefile format
-SOCK_PATH=\"/tmp/cs165_unix_socket\"
-
-####### Automatic dependency magic #######
-# Set-up dependency directory
+# --- Automatic Dependency Tracking ---
 DEPSDIR := .deps
 BUILDSTAMP := $(DEPSDIR)/rebuildstamp
 DEPFILES := $(wildcard $(DEPSDIR)/*.d)
 ifneq ($(DEPFILES),)
 include $(DEPFILES)
 endif
-DEPCFLAGS = -MD -MF $(DEPSDIR)/$*.d -MP -DSOCK_PATH=$(SOCK_PATH)
 
-# Dependency compilation
-ifneq ($(DEP_CC),$(CC) $(CFLAGS) $(DEPCFLAGS) $(O))
-DEP_CC := $(shell mkdir -p $(DEPSDIR); echo >$(BUILDSTAMP); echo "DEP_CC:=$(CC) $(CFLAGS) $(DEPCFLAGS) $(O)" >$(DEPSDIR)/_cc.d)
-endif
+# Dependency compilation flags (using CXXFLAGS)
+DEPCFLAGS = -MMD -MP -MF $(DEPSDIR)/$*.d -DSOCK_PATH=$(SOCK_PATH)
 
 # Make sure dependency directories are generated
 $(DEPSDIR)/stamp $(BUILDSTAMP):
 	mkdir -p $(@D)
 	touch $@
 
-####### Automatic dependency magic #######
+# --- Compilation Rules ---
+
+# Object files (compile .cpp files)
+%.o : %.cpp $(BUILDSTAMP)
+	$(CXX) $(CXXFLAGS) $(DEPCFLAGS) -o $@ -c $<
 
 %.o : %.c $(BUILDSTAMP)
-	$(CC) $(CFLAGS) $(DEPCFLAGS) -O$(O) -o $@ -c $<
+	$(CXX) $(CXXFLAGS) $(DEPCFLAGS) -o $@ -c $<
 
-##
-# To include additional non-executable files (e.g. selects.c, utils.c, etc),
-# you'll need to add an additional build dependency to the file that requires
-# the new file.  For example, see that client and server both require utils.o
-#
-# If you create a new file such as selects.c, then you will need a "selects.o"
-# dependency on the right side of whichever one requires the file.
-##
+# --- Linking ---
 
+# Client executable
 client: client.o utils.o
-	$(CC) $(CFLAGS) $(DEPCFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
+# Server executable
 server: server.o parse.o utils.o db_manager.o client_context.o
-	$(CC) $(CFLAGS) $(DEPCFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+# --- Clean Targets ---
 
 clean:
-	rm -f client server *.o *~ *.bak core *.core $(SOCK_PATH)
-	rm -rf .deps
+	rm -f client server *.o *~ *.bak core *.core $(DEPSDIR)/* $(SOCK_PATH)
 
 distclean: clean
 	rm -rf $(DEPSDIR)

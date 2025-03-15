@@ -69,7 +69,7 @@ DbOperator* parse_create_tbl(char* create_arguments) {
         return NULL;
     }
     // make create dbo for table
-    DbOperator* dbo = malloc(sizeof(DbOperator));
+    DbOperator* dbo = (DbOperator*) malloc(sizeof(DbOperator));
     dbo->type = CREATE;
     dbo->operator_fields.create_operator.create_type = _TABLE;
     strcpy(dbo->operator_fields.create_operator.name, table_name);
@@ -107,7 +107,7 @@ DbOperator* parse_create_db(char* create_arguments) {
             return NULL;
         }
         // make create operator. 
-        DbOperator* dbo = malloc(sizeof(DbOperator));
+        DbOperator* dbo = (DbOperator*) malloc(sizeof(DbOperator));
         dbo->type = CREATE;
         dbo->operator_fields.create_operator.create_type = _DB;
         strcpy(dbo->operator_fields.create_operator.name, db_name);
@@ -123,7 +123,7 @@ DbOperator* parse_create(char* create_arguments) {
     DbOperator* dbo = NULL;
     char *tokenizer_copy, *to_free;
     // Since strsep destroys input, we create a copy of our input. 
-    tokenizer_copy = to_free = malloc((strlen(create_arguments)+1) * sizeof(char));
+    tokenizer_copy = to_free = (char*) malloc((strlen(create_arguments)+1) * sizeof(char));
     char *token;
     strcpy(tokenizer_copy, create_arguments);
     // check for leading parenthesis after create. 
@@ -174,10 +174,10 @@ DbOperator* parse_insert(char* query_command, message* send_message) {
             return NULL;
         }
         // make insert operator. 
-        DbOperator* dbo = malloc(sizeof(DbOperator));
+        DbOperator* dbo = (DbOperator*) malloc(sizeof(DbOperator));
         dbo->type = INSERT;
         dbo->operator_fields.insert_operator.table = insert_table;
-        dbo->operator_fields.insert_operator.values = malloc(sizeof(int) * insert_table->col_count);
+        dbo->operator_fields.insert_operator.values = (int*) malloc(sizeof(int) * insert_table->col_count);
         // parse inputs until we reach the end. Turn each given string into an integer. 
         while ((token = strsep(command_index, ",")) != NULL) {
             int insert_val = atoi(token);

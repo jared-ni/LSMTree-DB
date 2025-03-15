@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "*.sqlbook": "sql",
+        "*.ndjson": "jsonl",
+        "*.dbclient-js": "javascript",
+        "unordered_map": "c",
+        "locale": "cpp",
+        "__locale": "cpp",
+        "string": "cpp",
+        "string_view": "cpp"
+    }
+}

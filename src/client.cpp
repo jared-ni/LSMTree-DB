@@ -79,12 +79,12 @@ int main(void)
 
     // Always output an interactive marker at the start of each command if the
     // input is from stdin. Do not output if piped in from file or from other fd
-    char* prefix = "";
+    const char* prefix = "";
     if (isatty(fileno(stdin))) {
         prefix = "db_client > ";
     }
 
-    char *output_str = NULL;
+    const char *output_str = NULL;
     int len = 0;
 
     // Continuously loop and wait for input. At each iteration:
@@ -92,7 +92,7 @@ int main(void)
     // 2. read from stdin until eof.
     char read_buffer[DEFAULT_STDIN_BUFFER_SIZE];
     send_message.payload = read_buffer;
-    send_message.status = 0;
+    send_message.status = OK_DONE;
 
     while (printf("%s", prefix), output_str = fgets(read_buffer,
            DEFAULT_STDIN_BUFFER_SIZE, stdin), !feof(stdin)) {
