@@ -230,7 +230,7 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
         handle = NULL;
     }
 
-    cs165_log(stdout, "QUERY: %s\n", query_command);
+    cs165_log(stdout, "FD %i> QUERY: %s\n", client_socket, query_command);
 
     // by default, set the status to acknowledge receipt of command,
     //   indication to client to now wait for the response from the server.
