@@ -10,13 +10,12 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <set>
 
-#include "common.h"
 #include "parse.h"
-#include "cs165_api.h"
 #include "message.h"
 #include "utils.h"
-#include "client_context.h"
+#include "db_types.h"
 
 #define DEFAULT_QUERY_BUFFER_SIZE 1024
 #define WORKER_THREADS_NUM 5
@@ -24,7 +23,6 @@
 // holds client sockets and states
 typedef struct {
     int client_socket;
-    ClientContext* client_context;
 } client_job;
 
 // shut sown worker threads
@@ -60,7 +58,7 @@ char* execute_DbOperator(DbOperator* query) {
     }
 }
 
-void handle_client_request(int client_socket, ClientContext* client_context) {
+void handle_client_request(int client_socket) {
     // Create two messages, one from which to read and one from which to receive
     message send_message;
     message recv_message;
@@ -83,7 +81,7 @@ void handle_client_request(int client_socket, ClientContext* client_context) {
     // 1. Parse command: client query str -> database operator request
     // TODO: match to the correct command. 
     // If the command is not supported, set the status to UNKNOWN_COMMAND 
-    DbOperator* query = parse_command(recv_message.payload, &send_message, client_socket, client_context);
+    DbOperator* query = parse_command(recv_message.payload, &send_message, client_socket);
 
     // 2. Handle request: db operator request executed -> get response in send_message
     char* result = execute_DbOperator(query);
@@ -164,7 +162,8 @@ int main(void)
     log_info("[SERVER] server socket %d established.\n", server_socket);
 
     // map client socket fds to clientContexts
-    std::unordered_map<int, ClientContext*> clientContexts;
+    // std::unordered_map<int, ClientContext*> clientContexts
+    std::set<int> clientSockets;
     // fd_set bitmap manages set of fds when using select in multiplexing
     fd_set read_fds;
     // update max_fd always to current max fd number
@@ -177,7 +176,7 @@ int main(void)
         FD_SET(server_socket, &read_fds);
 
         // add active client sockets to read_fds
-        for (auto const& [client_socket, context] : clientContexts) {
+        for (auto const& client_socket : clientSockets) {
             FD_SET(client_socket, &read_fds);
             max_fd = std::max(max_fd, client_socket);
         }
@@ -200,13 +199,12 @@ int main(void)
 
             log_info("[SERVER] Accepted new client connection %d.\n", client_socket);
 
-            ClientContext* client_context = NULL;
-            clientContexts[client_socket] = client_context;
+            clientSockets.insert(client_socket);
         }
 
         // all all ready client sockets
         std::vector<int> ready_client_sockets;
-        for (auto const& [client_socket, context] : clientContexts) {
+        for (auto const& client_socket : clientSockets) {
             if (FD_ISSET(client_socket, &read_fds)) {
                 ready_client_sockets.push_back(client_socket);
             }
@@ -214,27 +212,23 @@ int main(void)
         // check all ready client sockets
         for (int client_socket : ready_client_sockets) {
             if (FD_ISSET(client_socket, &read_fds)) {
-                ClientContext* client_context = clientContexts[client_socket];
-
                 // check for closed
                 char buffer;
                 // recv return 0 when peeking only on a closed socket
                 if (recv(client_socket, &buffer, 1, MSG_PEEK) == 0) {
                     log_info("Client disconnected at socket %d\n", client_socket);
                     close(client_socket);
-                    free(client_context);
-                    clientContexts.erase(client_socket);
+                    clientSockets.erase(client_socket);
                     continue;
                 } else {
-                    handle_client_request(client_socket, client_context);
+                    handle_client_request(client_socket);
                 }
             }
         }
     }
 
-    for (auto const& [client_socket, client_context] : clientContexts) {
+    for (auto const& client_socket : clientSockets) {
         close(client_socket);
-        free(client_context);
     }
     close(server_socket);
 

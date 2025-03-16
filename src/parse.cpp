@@ -12,12 +12,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include "cs165_api.h"
 #include "parse.h"
 #include "utils.h"
-#include "client_context.h"
+#include "db_types.h"
 #include <vector>
 #include <iostream>
+
 
 /**
  * Takes a pointer to a string.
@@ -54,8 +54,7 @@ void parse_args(char* query_command, DbOperator* dbo) {
  *      How would you add a new command type to parse? 
  *      What if such command requires multiple arguments?
  **/
-DbOperator* parse_command(char* query_command, message* send_message, int client_socket, 
-                          ClientContext* client_context) {
+DbOperator* parse_command(char* query_command, message* send_message, int client_socket) {
     /**
      * commands: put (p), get (g), range (r), delete (d), load (l), print stats (s)
      * put: p [INT1] [INT2]
@@ -68,7 +67,6 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
 
     DbOperator *dbo = new DbOperator();
     // dbo->client_fd = client_socket;
-    // dbo->context = client_context;
 
     cs165_log(stdout, "FD %i> QUERY: %s\n", client_socket, query_command);
 
@@ -172,6 +170,5 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
     }
     
     dbo->client_fd = client_socket;
-    dbo->context = client_context;
     return dbo;
 }

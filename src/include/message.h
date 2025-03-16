@@ -2,7 +2,6 @@
 #define MESSAGE_H__
 
 // mesage_status defines the status of the previous request.
-// FEEL FREE TO ADD YOUR OWN OR REMOVE ANY THAT ARE UNUSED IN YOUR PROJECT
 typedef enum message_status {
     OK_DONE,
     OK_WAIT_FOR_RESPONSE,

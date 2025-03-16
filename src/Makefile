@@ -52,7 +52,7 @@ client: client.o utils.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # Server executable
-server: server.o parse.o utils.o db_manager.o client_context.o
+server: server.o parse.o utils.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # --- Clean Targets ---

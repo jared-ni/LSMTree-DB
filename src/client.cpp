@@ -24,7 +24,6 @@ machine please look into this as a a source of error. */
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#include "common.h"
 #include "message.h"
 #include "utils.h"
 
