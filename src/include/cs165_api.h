@@ -28,6 +28,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <vector>
 
 // Limits the size of a name in our database to 64 characters
 #define MAX_SIZE_NAME 64
@@ -189,11 +190,15 @@ typedef struct Comparator {
 
 /*
  * tells the databaase what type of operator this is
+ commands: put (p), get (g), range (r), delete (d), load (l), print stats (s)
  */
 typedef enum OperatorType {
-    CREATE,
-    INSERT,
+    PUT,
+    GET,
+    RANGE,
+    DELETE,
     LOAD,
+    PRINT_STATS,
 } OperatorType;
 
 
@@ -251,6 +256,8 @@ typedef struct DbOperator {
     OperatorFields operator_fields;
     int client_fd;
     ClientContext* context;
+
+    std::vector<long long> args;
 } DbOperator;
 
 extern Db *current_db;

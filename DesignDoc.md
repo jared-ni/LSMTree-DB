@@ -26,6 +26,7 @@ Phase 1: LSM-tree core components
     - design file format for sorted runs (keys, values, min/max keys). 
     - define size ratios between levels (L1 = L0 * 10)
     - create manifest structure: describes the file to level relationships and indicate which set of files form a current snapshot
+    - Basically have one file per level, and then write into the upper level first, and every next level can be bigger.s
 
 5. Handle merging / compaction
     - triggered when level reaches capacity, or set of sorted files overlapping (called run).

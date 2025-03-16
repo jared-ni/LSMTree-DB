@@ -9,6 +9,7 @@
 #include <queue>
 #include <vector>
 #include <algorithm>
+#include <iostream>
 
 #include "common.h"
 #include "parse.h"
@@ -30,39 +31,33 @@ typedef struct {
 bool shutdown_requested = false;
 pthread_mutex_t shutdown_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/** execute_DbOperator takes as input the DbOperator and executes the query.
- *      What are the structural attributes of a `query`?
- *      How will you interpret different queries?
- *      How will you ensure different queries invoke different execution paths in your code?
+/** Step 2 in handle_client_request: 
+ * TODO: handle query types according CS265 domain specific language
  **/
 char* execute_DbOperator(DbOperator* query) {
-    // there is a small memory leak here (when combined with other parts of your database.)
-    // as practice with something like valgrind and to develop intuition on memory leaks, find and fix the memory leak. 
     if(!query) {
         return strdup("[SERVER] Error: Invalid DB query.");
-    }
-    if(query && query->type == CREATE){
-        if(query->operator_fields.create_operator.create_type == _DB){
-            if (create_db(query->operator_fields.create_operator.name).code == OK) {
-                return strdup("165");
-            } else {
-                return strdup("Failed");
-            }
+    } else if (query->type == PUT) {
+        std::cout << "putting " << std::endl;
+        for (int i = 0; i < 2; i++) {
+            std::cout << query->args[i] << std::endl;
         }
-        else if(query->operator_fields.create_operator.create_type == _TABLE){
-            Status create_status;
-            create_table(query->operator_fields.create_operator.db, 
-                query->operator_fields.create_operator.name, 
-                query->operator_fields.create_operator.col_count, 
-                &create_status);
-            if (create_status.code != OK) {
-                cs165_log(stdout, "adding a table failed.");
-                return strdup("Failed");
-            }
-            return strdup("165");
-        }
+        return strdup("[SERVER] putting.");
+    } else if (query->type == GET) {
+        std::cout << "getting " << std::endl;
+    } else if (query->type == RANGE) {
+        std::cout << "range " << std::endl;
+    } else if (query->type == DELETE) {
+        std::cout << "deleting " << std::endl;
+    } else if (query->type == LOAD) {
+        std::cout << "loading " << std::endl;
+    } else if (query->type == PRINT_STATS) {
+        std::cout << "printing stats" << std::endl;
+    } else if (query->type == INCORRECT_FORMAT) {
+        return strdup("[SERVER] Error: Invalid query argument format.");
+    } else {
+        return strdup("[SERVER] Error: Invalid query type.");
     }
-    return strdup("[SERVER] Error: Invalid DB query.");
 }
 
 void handle_client_request(int client_socket, ClientContext* client_context) {
@@ -85,12 +80,12 @@ void handle_client_request(int client_socket, ClientContext* client_context) {
     recv_message.payload = recv_buffer;
     recv_message.payload[recv_message.length] = '\0';
 
-    // 1. Parse command
-    //    Query string is converted into a request for an database operator
+    // 1. Parse command: client query str -> database operator request
+    // TODO: match to the correct command. 
+    // If the command is not supported, set the status to UNKNOWN_COMMAND 
     DbOperator* query = parse_command(recv_message.payload, &send_message, client_socket, client_context);
 
-    // 2. Handle request
-    //    Corresponding database operator is executed over the query
+    // 2. Handle request: db operator request executed -> get response in send_message
     char* result = execute_DbOperator(query);
 
     send_message.length = strlen(result);
@@ -99,7 +94,7 @@ void handle_client_request(int client_socket, ClientContext* client_context) {
     send_message.payload = send_buffer;
     send_message.status = OK_WAIT_FOR_RESPONSE;
     
-    // 3. Send status of the received message (OK, UNKNOWN_QUERY, etc)
+    // 3. send status of the db respnose
     if (send(client_socket, &(send_message), sizeof(message), 0) == -1) {
         log_err("Failed to send message.");
         exit(1);
@@ -113,8 +108,7 @@ void handle_client_request(int client_socket, ClientContext* client_context) {
 }
 
 
-// setup_server(): set up server side listening socket
-// return file descriptor of the listening socket
+// setup_server(): set up server side listening socket & return its file descriptor
 int setup_server() {
     int server_socket;
     size_t len;
@@ -154,10 +148,13 @@ int setup_server() {
     return server_socket;
 }
 
-// TODO: extend to handle multiple clients (how many?)
-// Think about what is shared between clients and what is not
-// Use multiplexing: Accept client connection sockets without blocking,
-// use select to wait for activity on any fo the sockets when data can be read/send from any of them.
+
+/**
+* TODO: extend to handle multiple clients
+* Think about what is shared between clients and what is not
+* Use multiplexing: Accept client connection sockets without blocking,
+* use select to wait for activity on any fo the sockets when data can be read/send from any of them.
+**/
 int main(void)
 {
     int server_socket = setup_server();
@@ -240,18 +237,6 @@ int main(void)
         free(client_context);
     }
     close(server_socket);
-
-
-    // struct sockaddr_un remote;
-    // socklen_t t = sizeof(remote);
-    // int client_socket = 0;
-
-    // if ((client_socket = accept(server_socket, (struct sockaddr *)&remote, &t)) == -1) {
-    //     log_err("L%d: Failed to accept a new connection.\n", __LINE__);
-    //     exit(1);
-    // }
-
-    // handle_client(client_socket);
 
     return 0;
 }
