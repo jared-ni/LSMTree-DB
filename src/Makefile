@@ -1,7 +1,7 @@
 # CS165 Makefile (C++ Version)
 
 # Target executables
-all: client server
+all: client server lsm_tests
 
 # C++ compiler settings
 CXX = g++
@@ -18,7 +18,7 @@ LIBS =
 INCLUDES = include
 
 # Unix socket path (escaped for makefile format)
-SOCK_PATH = \"/tmp/cs165_unix_socket\"
+SOCK_PATH = \"/tmp/my_unix_socket\"
 
 # --- Automatic Dependency Tracking ---
 DEPSDIR := .deps
@@ -53,6 +53,9 @@ client: client.o utils.o
 
 # Server executable
 server: server.o parse.o utils.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+lsm_tests: test_main.o lsm_tree.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # --- Clean Targets ---

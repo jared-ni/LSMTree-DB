@@ -21,6 +21,7 @@ class DataPair {
     // tombstone to mark deleted keys
     bool deleted_;
 
+    bool operator<(long other_key) const;
     bool operator<(const DataPair& other) const;
     bool operator==(const DataPair& other) const;
 };
@@ -28,7 +29,7 @@ class DataPair {
 
 class SSTable {
     public:
-    SSTable::SSTable(const std::vector<DataPair>& data, 
+    SSTable(const std::vector<DataPair>& data, 
                      int level_num);
                     //  const std::string& file_name);
 
@@ -70,7 +71,7 @@ class Level {
     // compaction
     bool needsCompaction() const;
 
-    void Level::printLevel() const;
+    void printLevel() const;
 };
 
 // buffer/memtable, where all data is stored before being flushed to disk

@@ -2,6 +2,28 @@
 #include <iostream>
 
 /**
+ * DataPair methods
+ */
+
+DataPair::DataPair(long key, long value, bool deleted) {
+    this->key_ = key;
+    this->value_ = value;
+    this->deleted_ = deleted;
+}
+
+bool DataPair::operator<(long other_key) const {
+    return key_ < other_key;
+}
+
+bool DataPair::operator<(const DataPair& other) const {
+    return key_ < other.key_;
+}
+
+bool DataPair::operator==(const DataPair& other) const {
+    return key_ == other.key_;
+}
+
+/**
  * SSTable methods
  */
 SSTable::SSTable(const std::vector<DataPair>& data, int level_num) {
@@ -152,6 +174,8 @@ bool Buffer::putData(const DataPair& data) {
     cur_size_++;
     return true;
 }
+
+
 
 
 
