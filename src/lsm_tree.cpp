@@ -38,6 +38,7 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num) {
         min_key_ = std::numeric_limits<long>::max();
         max_key_ = std::numeric_limits<long>::min();
     } else {
+        // this assumes data MUST BE sorted
         size_ = data.size();
         // data is sorted
         min_key_ = data.front().key_;
@@ -98,13 +99,11 @@ void Level::addSSTable(std::shared_ptr<SSTable> sstable_ptr) {
 
 void Level::removeSSTable(std::shared_ptr<SSTable> sstable_ptr) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    auto it = std::remove_if(sstables_.begin(), sstables_.end(),
-                            [&](const std::shared_ptr<SSTable>& ptr) {
-                                return ptr == sstable_ptr;
-                            });
+    // erase the first instance of sstable_ptr
+    auto it = std::find(sstables_.begin(), sstables_.end(), sstable_ptr);
 
     if (it != sstables_.end()) {
-        sstables_.erase(it, sstables_.end()); // Erase the element
+        sstables_.erase(it); // Erase the element
         cur_size_--;  // Decrement current size
     }
 }
@@ -173,6 +172,17 @@ bool Buffer::putData(const DataPair& data) {
     buffer_data_.insert(it, data);
     cur_size_++;
     return true;
+}
+
+std::optional<DataPair> Buffer::getData(long key) const {
+    // search through buffer to see if data exists, for now
+    auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
+    if (it != buffer_data_.end() && it->key_ == key) {
+        return *it;
+    }
+    return std::nullopt;
+
+    // need to search the levels next, using bloom filter on each level
 }
 
 
