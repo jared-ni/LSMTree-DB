@@ -58,6 +58,7 @@
         "new": "cpp",
         "print": "cpp",
         "stdexcept": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "shared_mutex": "cpp"
     }
 }
