@@ -9,9 +9,9 @@
 #include <shared_mutex>
 
 #define BUFFER_CAPACITY 10
-#define MAX_TABLES_PER_LEVEL 5
-#define LEVEL_THRESHOLD_SIZE 10
-#define LEVEL_SIZE_RATIO 10
+#define BASE_LEVEL_TABLE_CAPACITY 5
+#define LEVEL_SIZE_RATIO 10 // how much bigger l1 is than l0
+#define MAX_LEVELS 7
 
 class DataPair {
     public:
@@ -81,7 +81,6 @@ class Buffer {
     
     size_t capacity_;
     size_t cur_size_;
-    std::unique_ptr<Level> level1_ptr_;
     // need to refactor to balanced binary tree, skip list, or B tree
     std::vector<DataPair> buffer_data_;
 
@@ -95,23 +94,33 @@ class Buffer {
 };
 
 
-// class LSMTree {
-//     public:
-//     LSMTree(const std::string& db_path, 
-//             size_t buffer_capacity = LEVEL_THRESHOLD_SIZE,
-//             size_t tables_per_level = MAX_TABLES_PER_LEVEL);
-//     ~LSMTree();
+class LSMTree {
+    public:
+    LSMTree(const std::string& db_path, 
+            size_t buffer_capacity = BUFFER_CAPACITY,
+            size_t base_level_table_capacity = BASE_LEVEL_TABLE_CAPACITY, 
+            size_t total_levels = MAX_LEVELS, 
+            size_t level_size_ratio = LEVEL_SIZE_RATIO);
 
-//     std::string db_path_;
-//     size_t buffer_capacity_;
-//     size_t tables_per_level_;
+    std::string db_path_;
+
+    size_t buffer_capacity_;
+    size_t base_level_table_capacity_;
+    size_t total_levels_;
+    size_t level_size_ratio_;
     
-//     std::unique_ptr<Buffer> buffer_;
-//     std::vector<Level> levels_;
+    std::unique_ptr<Buffer> buffer_;
+    // LSM tree owns the levels, so unique_ptr, and it coordinates buffer/level flushes
+    std::vector<std::unique_ptr<Level>> levels_;
 
-//     // protects all flush: only one thread can flush at a time
-//     std::mutex flush_mutex_;
+    // buffer methods
+    void flushBuffer();
+    // API: put, get, range, delete
+    bool putData(const DataPair& data);
+    std::optional<DataPair> getData(long key) const;
 
-// };
+    // protects all flush: only one thread can flush at a time
+    std::mutex flush_mutex_;
+};
 
 #endif

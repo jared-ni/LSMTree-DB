@@ -130,7 +130,6 @@ void Level::printLevel() const{
 Buffer::Buffer(size_t capacity, size_t cur_size) {
     this->capacity_ = capacity;
     this->cur_size_ = cur_size;
-    this->level1_ptr_ = std::make_unique<Level>(1, LEVEL_THRESHOLD_SIZE);
     // reserve space for buffer_data_ so it doesn't have to resize
     buffer_data_.reserve(capacity);
 }
@@ -143,13 +142,11 @@ std::shared_ptr<SSTable> Buffer::flushBuffer() {
     if (buffer_data_.empty()) {
         return nullptr;
     }
-    // create new SSTable with buffer_data_
+    // // create new SSTable with buffer_data_
     auto sstable_ptr = std::make_shared<SSTable>(buffer_data_, 1);
-    // add to l1
-    level1_ptr_->addSSTable(sstable_ptr);
+    // clear buffer
     buffer_data_.clear();
     cur_size_ = 0;
-
     return sstable_ptr;
 }
 
@@ -160,17 +157,12 @@ bool Buffer::putData(const DataPair& data) {
     auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), data.key_);
     if (it != buffer_data_.end() && it->key_ == data.key_) {
         it->value_ = data.value_;
-        it->deleted_ = false;
-        return true;
+        it->deleted_ = data.deleted_;
+    } else {
+        // insert data in sorted order
+        buffer_data_.insert(it, data);
+        cur_size_++;
     }
-
-    // if buffer is full, flush to level 1
-    if (isFull()) {
-        flushBuffer();
-    }
-    // insert data in sorted order
-    buffer_data_.insert(it, data);
-    cur_size_++;
     return true;
 }
 
@@ -185,8 +177,92 @@ std::optional<DataPair> Buffer::getData(long key) const {
     // need to search the levels next, using bloom filter on each level
 }
 
+/**
+ * LSMTree methods
+ * 
+ */
+LSMTree::LSMTree(const std::string& db_path, 
+                 size_t buffer_capacity, 
+                 size_t base_level_capacity, 
+                 size_t total_levels,
+                 size_t level_size_ratio) {
+    this->db_path_ = db_path;
 
+    this->buffer_capacity_ = buffer_capacity;
+    this->base_level_table_capacity_ = base_level_capacity;
+    this->total_levels_ = total_levels;
+    this->level_size_ratio_ = level_size_ratio;
 
+    this->buffer_ = std::make_unique<Buffer>(buffer_capacity);
+
+    // create levels, each which bigger capacity
+    levels_.reserve(total_levels);
+    size_t cur_level_capacity = base_level_capacity;
+    for (size_t i = 0; i < total_levels; i++) {
+        levels_.push_back(std::make_unique<Level>(i, cur_level_capacity));
+        cur_level_capacity *= LEVEL_SIZE_RATIO;
+    }
+}
+
+void LSMTree::flushBuffer() {
+    // lock mutex
+    std::lock_guard<std::mutex> lock(flush_mutex_);
+    // flush buffer to level 0
+    std::shared_ptr<SSTable> sstable_ptr = buffer_->flushBuffer();
+    if (sstable_ptr == nullptr) {
+        return;
+    }
+    // TODO: forget cascading compaction for now
+    // cascading compaction: until the max level
+    // if level 0 is full, flush to level 1, etc.
+    int cur_level = 0;
+    // while (cur_level < total_levels_ - 1 &&
+    //     levels_[cur_level]->needsCompaction()) {
+    //     // flush to next level
+    //     std::shared_ptr<SSTable> sstable_ptr = levels_[cur_level]->getSSTables()[0];
+    //     levels_[cur_level]->removeSSTable(sstable_ptr);
+    //     levels_[cur_level + 1]->addSSTable(sstable_ptr);
+    //     cur_level++;
+    // }
+    if (levels_[0]->needsCompaction()) {
+    }
+    levels_[0]->addSSTable(sstable_ptr);
+}
+
+bool LSMTree::putData(const DataPair& data) {
+    // if level is full, flush. put data in buffer either way
+    if (buffer_->isFull()) {
+        flushBuffer();
+    }
+    bool rt = buffer_->putData(data);
+    return rt;
+}
+
+std::optional<DataPair> LSMTree::getData(long key) const {
+    // search buffer first
+    std::optional<DataPair> data_pair = buffer_->getData(key);
+    if (data_pair.has_value()) {
+        if (data_pair.value().deleted_) {
+            return std::nullopt;
+        } else {
+            return data_pair;
+        }
+    }
+
+    // search levels next
+    // need bloom filter implementation
+    // for (const auto& level : levels_) {
+    //     for (const auto& cur_sstable : level->getSSTables()) {
+    //         if (cur_sstable->keyInSSTable(key)) {
+    //             data_pair = cur_sstable->getDataPair(key);
+    //             if (data_pair.has_value()) {
+    //                 return data_pair.value();
+    //             }
+    //         }
+    //     }
+    // }
+    return std::nullopt;
+}
 
 
 
