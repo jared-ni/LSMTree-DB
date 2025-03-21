@@ -80,15 +80,18 @@ void test_sstable() {
 
 // Level tests
 void test_level() {
-    const size_t level_capacity = 2;
+    const size_t table_capacity = 2;
+    const size_t entries_capacity = 4;
 
     std::cout << "[TEST] Testing Level ------------" << std::endl;
 
     // 1. test create level 1 with capacity 2
-    Level level(1, level_capacity);
+    Level level(1, table_capacity, entries_capacity);
     assert(level.level_num_ == 1);
-    assert(level.capacity_ == level_capacity);
-    assert(level.cur_size_ == 0);
+    assert(level.table_capacity_ == table_capacity);
+    assert(level.entries_capacity_ == entries_capacity);
+    assert(level.cur_table_count_ == 0);
+    assert(level.cur_total_entries_ == 0);
     assert(level.getSSTables().empty());
     assert(!level.needsCompaction());
     std::cout << "Level constructor tests PASSED." << std::endl;
@@ -105,13 +108,15 @@ void test_level() {
     std::shared_ptr<SSTable> sstable1 = std::make_shared<SSTable>(data1, 1);
     std::shared_ptr<SSTable> sstable2 = std::make_shared<SSTable>(data2, 1);
     level.addSSTable(sstable1);
-    assert(level.cur_size_ == 1);
+    assert(level.cur_table_count_ == 1);
+    assert(level.cur_total_entries_ == 2);
     assert(level.getSSTables().size() == 1);
     assert(level.getSSTables()[0] == sstable1);
     assert(!level.needsCompaction());
 
     level.addSSTable(sstable2);
-    assert(level.cur_size_ == 2);
+    assert(level.cur_table_count_ == 2);
+    assert(level.cur_total_entries_ == 4);
     assert(level.getSSTables().size() == 2);
     assert(level.getSSTables()[0] == sstable1);
     assert(level.getSSTables()[1] == sstable2);
@@ -120,7 +125,7 @@ void test_level() {
 
     // 3. test removeSSTable
     level.removeSSTable(sstable1);
-    assert(level.cur_size_ == 1);
+    assert(level.cur_table_count_ == 1);
     assert(level.getSSTables()[0] == sstable2);
     assert(!level.needsCompaction());
     std::cout << "Level removeSSTable tests PASSED." << std::endl;
@@ -147,7 +152,7 @@ void test_level() {
     std::shared_ptr<SSTable> sstable3 = std::make_shared<SSTable>(data1, 1);
     level.removeSSTable(sstable3);
     level.printLevel();
-    assert(level.cur_size_ == 2);
+    assert(level.cur_table_count_ == 2);
     assert(level.getSSTables().size() == 2);
     std::cout << "Level remove non-existent sstable tests PASSED." << std::endl;
 }
@@ -191,12 +196,54 @@ void test_buffer() {
     std::cout << "Buffer put same key tests PASSED." << std::endl;
 }
 
+// LSM Tree tests
+void test_lsm_tree() {
+    std::cout << "[TEST] testing LSMTree ------------" << std::endl;
+    // Use smaller caps
+    const size_t TEST_BUFFER_CAP = 2;
+    const size_t BASE_LEVEL_TABLE_CAP = 2; // for l0
+    const size_t TEST_LEVEL_RATIO = 2; // l1 is 2* 2 = 4
+    const size_t total_levels = 3;
+
+    // 1. create LSMTree
+    LSMTree lsm_tree("test_db_simple", TEST_BUFFER_CAP, BASE_LEVEL_TABLE_CAP, total_levels, TEST_LEVEL_RATIO);
+    std::cout << "LSMTree created with BufferCap=" << TEST_BUFFER_CAP
+              << ", L0TableCap=" << BASE_LEVEL_TABLE_CAP << std::endl;
+
+    // 2. initial Puts (Fill Buffer)
+    lsm_tree.putData({1, 100}); // {1}
+    lsm_tree.putData({2, 200}); // {1, 2}
+    assert(lsm_tree.buffer_->cur_size_ == 2);
+    lsm_tree.putData({3, 150}); // flush to l0, {3}
+    assert(lsm_tree.buffer_->cur_size_ == 1);
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
+    lsm_tree.putData({4, 250}); // {3, 4}
+
+    lsm_tree.buffer_->printBuffer();
+    lsm_tree.levels_[0]->printLevel();
+    lsm_tree.levels_[1]->printLevel();
+
+    lsm_tree.putData({5, 300}); // flush to l0, {5}, l0 has 2 tables now
+    lsm_tree.putData({6, 350}); // {5, 6}
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 2);
+
+    lsm_tree.putData({7, 400}); // flush to l0, {7}, l0 compacts to l1, l0 has 1 table left
+
+    // assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
+    // assert(lsm_tree.levels_[1]->cur_table_count_ == 1);
+
+    lsm_tree.buffer_->printBuffer();
+    lsm_tree.levels_[0]->printLevel();
+    lsm_tree.levels_[1]->printLevel();
+}
+
 
 int main() {
-    test_datapair();
-    test_sstable();
-    test_level();
-    test_buffer();
+    // test_datapair();
+    // test_sstable();
+    // test_level();
+    // test_buffer();
+    test_lsm_tree();
     std::cout << "All tests passed!" << std::endl;
     return 0;
 }

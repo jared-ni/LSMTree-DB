@@ -12,6 +12,7 @@
 #define BASE_LEVEL_TABLE_CAPACITY 5
 #define LEVEL_SIZE_RATIO 10 // how much bigger l1 is than l0
 #define MAX_LEVELS 7
+#define MAX_ENTRIES_PER_LEVEL 512
 
 class DataPair {
     public:
@@ -26,6 +27,26 @@ class DataPair {
     bool operator==(const DataPair& other) const;
 };
 
+// snapshots of the states
+struct SSTableSnapshot {
+    int level_num;
+    long min_key;
+    long max_key;
+    size_t size;
+    std::vector<DataPair> table_data;
+
+    void printSSTable() const;
+};
+struct LevelSnapshot {
+    int level_num;
+    size_t table_capacity;
+    size_t entries_capacity;
+    size_t current_table_count;
+    size_t current_total_entries;
+    std::vector<SSTableSnapshot> sstables;
+
+    void printLevel() const;
+};
 
 class SSTable {
     public:
@@ -42,6 +63,8 @@ class SSTable {
 
     std::vector<DataPair> table_data_;
 
+    void printSSTable() const;
+
     // check if Key is in range of SSTable
     bool keyInRange(long key) const;
     bool keyInSSTable(long key) const;
@@ -52,10 +75,18 @@ class SSTable {
 class Level {
     public:
     // level_num is id, capacity is max size of this level, cur_size is current size
-    Level(int level_num, size_t capacity, size_t cur_size = 0);
+    Level(int level_num, 
+          size_t table_capacity,
+          size_t entries_capacity);
+
     int level_num_;
-    size_t capacity_;
-    size_t cur_size_; // number of SSTables in this level
+
+    size_t table_capacity_;
+    size_t entries_capacity_;
+
+    size_t cur_table_count_;
+    size_t cur_total_entries_;
+
     // tracks all SSTables on the current level
     std::vector<std::shared_ptr<SSTable>> sstables_;
     // probably need a mutex for later
@@ -63,10 +94,11 @@ class Level {
 
     // SSTable methods
     // don't think raw ptr gon work; prevent dangling ptrs in multithreaded env
-    const std::vector<std::shared_ptr<SSTable>>& getSSTables() const;
-    // can't edit SSTables, can only add or remove
+    std::vector<std::shared_ptr<SSTable>> getSSTables() const;
+
     void addSSTable(std::shared_ptr<SSTable> sstable_ptr);
     void removeSSTable(std::shared_ptr<SSTable> sstable_ptr);
+    void removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& tables_to_remove);
 
     // compaction
     bool needsCompaction() const;
@@ -84,6 +116,7 @@ class Buffer {
     // need to refactor to balanced binary tree, skip list, or B tree
     std::vector<DataPair> buffer_data_;
 
+    void printBuffer() const;
     bool isFull() const;
     std::shared_ptr<SSTable> flushBuffer();
     // API: put, get, range, delete
@@ -113,14 +146,44 @@ class LSMTree {
     // LSM tree owns the levels, so unique_ptr, and it coordinates buffer/level flushes
     std::vector<std::unique_ptr<Level>> levels_;
 
+    // for testing
+    std::vector<LevelSnapshot> getLevelsSnapshot() const;
+
     // buffer methods
     void flushBuffer();
+    
+    // compaction logic
+    bool checkCompaction(size_t level_index);
+    void compactLevel(size_t level_index);
+    // leveling merge policy main logic: 
+    std::vector<std::shared_ptr<SSTable>> mergeSSTables(
+        const std::vector<std::shared_ptr<SSTable>>& cur_level_tables,
+        const std::vector<std::shared_ptr<SSTable>>& next_level_tables,
+        int output_level_num);
+
     // API: put, get, range, delete
     bool putData(const DataPair& data);
     std::optional<DataPair> getData(long key) const;
 
     // protects all flush: only one thread can flush at a time
     std::mutex flush_mutex_;
+    std::mutex compaction_mutex_;
 };
+
+
+struct MergeEntry {
+    DataPair data;
+    size_t source_table_index;
+    size_t source_level_num;
+
+    bool operator>(const MergeEntry& other) const {
+        if (data.key_ != other.data.key_) {
+            return data.key_ > other.data.key_;
+        }
+        // prioritize the one from the lower level, min_heap so higher is later
+        return source_level_num > other.source_level_num;
+    }
+};
+
 
 #endif

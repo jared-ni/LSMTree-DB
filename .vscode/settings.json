@@ -59,6 +59,9 @@
         "print": "cpp",
         "stdexcept": "cpp",
         "algorithm": "cpp",
-        "shared_mutex": "cpp"
+        "shared_mutex": "cpp",
+        "__tree": "cpp",
+        "map": "cpp",
+        "set": "cpp"
     }
 }
