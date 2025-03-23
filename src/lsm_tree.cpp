@@ -272,7 +272,7 @@ LSMTree::LSMTree(const std::string& db_path,
     size_t cur_level_capacity = base_level_capacity;
     for (size_t i = 0; i < total_levels; i++) {
         levels_.push_back(std::make_unique<Level>(i, cur_level_capacity, MAX_ENTRIES_PER_LEVEL));
-        cur_level_capacity *= LEVEL_SIZE_RATIO;
+        cur_level_capacity *= level_size_ratio;
     }
 }
 
@@ -479,6 +479,11 @@ void LSMTree::compactLevel(size_t level_index) {
     std::vector<std::shared_ptr<SSTable>> output_tables = mergeSSTables(input_tables_level,
         input_tables_level_next, next_level_index);
         
+    if (levels_[next_level_index]->needsCompaction()) {
+        // cascade compaction
+        checkCompaction(next_level_index);
+    }
+
     // atomic replace
     {
         // std::unique_lock<std::shared_mutex> lock1(levels_[level_index]->mutex_);
@@ -497,8 +502,6 @@ void LSMTree::compactLevel(size_t level_index) {
               << " new tables to Level " << next_level_index << "." << std::endl;
     levels_[level_index]->printLevel();
     levels_[next_level_index]->printLevel();
-    // cascade compaction
-    checkCompaction(next_level_index);
 }
 
 // merge function for two SSTables

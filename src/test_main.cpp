@@ -202,11 +202,15 @@ void test_lsm_tree() {
     // Use smaller caps
     const size_t TEST_BUFFER_CAP = 2;
     const size_t BASE_LEVEL_TABLE_CAP = 2; // for l0
-    const size_t TEST_LEVEL_RATIO = 2; // l1 is 2* 2 = 4
-    const size_t total_levels = 3;
+    const size_t TEST_LEVEL_RATIO = 1; // l1 is 2* 2 = 4
+    const size_t total_levels = 4;
 
     // 1. create LSMTree
-    LSMTree lsm_tree("test_db_simple", TEST_BUFFER_CAP, BASE_LEVEL_TABLE_CAP, total_levels, TEST_LEVEL_RATIO);
+    LSMTree lsm_tree("test_db_simple", 
+                    TEST_BUFFER_CAP, 
+                    BASE_LEVEL_TABLE_CAP, 
+                    total_levels, 
+                    TEST_LEVEL_RATIO);
     std::cout << "LSMTree created with BufferCap=" << TEST_BUFFER_CAP
               << ", L0TableCap=" << BASE_LEVEL_TABLE_CAP << std::endl;
 
@@ -214,7 +218,7 @@ void test_lsm_tree() {
     lsm_tree.putData({1, 100}); // {1}
     lsm_tree.putData({2, 200}); // {1, 2}
     assert(lsm_tree.buffer_->cur_size_ == 2);
-    lsm_tree.putData({3, 150}); // flush to l0, {3}
+    lsm_tree.putData({3, 150}); // flush to l0, {3}, l0 = 1 table
     assert(lsm_tree.buffer_->cur_size_ == 1);
     assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
     lsm_tree.putData({4, 250}); // {3, 4}
@@ -223,18 +227,34 @@ void test_lsm_tree() {
     lsm_tree.levels_[0]->printLevel();
     lsm_tree.levels_[1]->printLevel();
 
-    lsm_tree.putData({5, 300}); // flush to l0, {5}, l0 has 2 tables now
+    lsm_tree.putData({5, 300}); // {5}, l0 = 2 tables
     lsm_tree.putData({6, 350}); // {5, 6}
     assert(lsm_tree.levels_[0]->cur_table_count_ == 2);
 
-    lsm_tree.putData({7, 400}); // flush to l0, {7}, l0 compacts to l1, l0 has 1 table left
+    lsm_tree.putData({7, 400});
+    lsm_tree.putData({8, 450}); 
+    lsm_tree.putData({9, 500}); 
+    lsm_tree.putData({10, 550});
+    lsm_tree.putData({11, 600}); // {11}, l0 = 1 table, l1 = 2 tables
+    lsm_tree.putData({12, 650}); // {11, 12}
+    lsm_tree.putData({13, 700}); // flush to l0, {13}, l0 2 table, l1 2 tables
+    lsm_tree.putData({14, 750}); // {13, 14}
+    lsm_tree.putData({15, 800}); // {15}, l0 1 table, l1 1 tables, l2 1 table
+    lsm_tree.putData({16, 850}); // {15, 16}
+    lsm_tree.putData({17, 900}); // {17}, l0 2 table, l1 1 table, l2 1 table
+    lsm_tree.putData({18, 950}); // {17, 18}
+    lsm_tree.putData({19, 1000}); // {19}, l0 1 table, l1 2 table, l2 2 table
 
-    // assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
-    // assert(lsm_tree.levels_[1]->cur_table_count_ == 1);
-
+    std::cout << "after 19, 1000" << std::endl;
     lsm_tree.buffer_->printBuffer();
     lsm_tree.levels_[0]->printLevel();
     lsm_tree.levels_[1]->printLevel();
+    lsm_tree.levels_[2]->printLevel();
+    lsm_tree.levels_[3]->printLevel();
+
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
+    assert(lsm_tree.levels_[1]->cur_table_count_ == 2);
+    assert(lsm_tree.levels_[2]->cur_table_count_ == 2);
 }
 
 
