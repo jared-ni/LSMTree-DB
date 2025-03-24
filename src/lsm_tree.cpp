@@ -3,6 +3,8 @@
 #include <queue>
 #include <algorithm> 
 
+#include <unistd.h>
+
 
 // helper function to generate SSTable filename
 inline std::string generateSSTableFilename(uint64_t file_id) {
@@ -136,6 +138,11 @@ bool SSTable::loadFromDisk() {
 
 
 void SSTable::printSSTable() const {
+    if (!data_loaded_) {
+        std::cout << "(SSTable on disk: " << file_path_ << " size: " << size_
+                  << " range: [" << min_key_ << "," << max_key_ << "]) ";
+        return;
+    }
     for (int i = 0; i < table_data_.size(); i++) {
         std::cout << table_data_[i].key_ << ":" << table_data_[i].value_ << ", ";
     }
@@ -176,16 +183,18 @@ bool SSTable::keyInRange(long key) const {
     return key >= min_key_ && key <= max_key_;
 }
 
-// TODO: 
-bool SSTable::keyInSSTable(long key) const {
+bool SSTable::keyInSSTable(long key) {
     if (!keyInRange(key)) { return false; }
 
-    for (const auto& pair : table_data_) {
-        if (pair.key_ == key) {
-            return true;
+    if (!data_loaded_) {
+        if (!loadFromDisk()) {
+        std::cerr << "can't load SSTable " << file_path_ << std::endl;
+            return false;
         }
     }
-    return false;
+    // Perform binary search
+    auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
+    return (it != table_data_.end() && it->key_ == key);
 }
 
 /**
@@ -354,12 +363,14 @@ LSMTree::LSMTree(const std::string& db_path,
                  size_t base_level_capacity, 
                  size_t total_levels,
                  size_t level_size_ratio) {
-    this->db_path_ = db_path;
 
+    this->db_path_ = db_path;
     this->buffer_capacity_ = buffer_capacity;
     this->base_level_table_capacity_ = base_level_capacity;
     this->total_levels_ = total_levels;
     this->level_size_ratio_ = level_size_ratio;
+    // path for history of SSTables
+    this->history_path_ = db_path + "/history";
 
     this->buffer_ = std::make_unique<Buffer>(buffer_capacity);
 
@@ -370,7 +381,231 @@ LSMTree::LSMTree(const std::string& db_path,
         levels_.push_back(std::make_unique<Level>(i, cur_level_capacity, MAX_ENTRIES_PER_LEVEL));
         cur_level_capacity *= level_size_ratio;
     }
+
+    // configure file system
+    setupDB();
 }
+
+void LSMTree::setupDB() {
+    std::error_code ec;
+    // makes sure path looks good
+    if (!std::filesystem::exists(db_path_) || 
+        !std::filesystem::is_directory(db_path_)) {
+        std::cout << "[LSMTree] no database directory, creating at: " << db_path_ << std::endl;
+        if (!std::filesystem::create_directories(db_path_, ec)) {
+            // Fatal error if DB directory cannot be created
+            std::cerr << "Failed creating db dir " << db_path_ << ": " << ec.message() << std::endl;
+            throw std::runtime_error("failed to create DB directory");
+        }
+    }
+
+    // set up levels
+    for (size_t i = 0; i < total_levels_; ++i) {
+        // returns the path for each level, given level num
+        std::string level_path = getLevelPath(i);
+        if (!std::filesystem::exists(level_path)) {
+            std::cout << "[LSMTree] creating level directory: " << level_path << std::endl;
+            if (!std::filesystem::create_directory(level_path, ec)) {
+                std::cerr << "failed to create level directory " << level_path << ": " << ec.message() << std::endl;
+                throw std::runtime_error("failed to create level directory");
+            }
+        }
+    }
+
+    // check history to load existing state if there's any
+    if (std::filesystem::exists(history_path_)) {
+        std::cout << "[LSMTree] loading history from: " << history_path_ << std::endl;
+        loadHistory();
+    } else {
+        std::cout << "[LSMTree] no history found at: " << history_path_ << std::endl;
+        // If no history, initialize an empty history file
+        // reset the next_file_id_ to 1
+        next_file_id_ = 1;
+        std::ofstream history_file(history_path_);
+    }
+}
+
+std::string LSMTree::getLevelPath(int level_num) const {
+    return db_path_ + "/level_" + std::to_string(level_num);
+}
+
+std::string LSMTree::getFilePath(int level_num, int file_id) const {
+    return getLevelPath(level_num) + "/" + generateSSTableFilename(file_id);
+}
+
+
+// TODO: persistence logic of loadHistory()
+void LSMTree::loadHistory() {
+    // std::ifstream infile(history_path_);
+    // if (!infile) {
+    //     std::cerr << "can't open history file: " << history_path_ << std::endl;
+    //     throw std::runtime_error("failed to load history");
+    // }
+
+    // std::string line;
+    // std::string command;
+    // int level_num;
+    // int file_id;
+    // long min_key;
+    // long max_key;
+    // size_t size;
+    // int next_id_val;
+
+    // std::map<int, std::map<uint64_t, std::shared_ptr<SSTable>>> active_tables;
+    // uint64_t max_seen_id = 0;
+
+    // while (std::getline(infile, line)) {
+    //     std::stringstream ss(line);
+    //     ss >> command;
+
+    //     if (command == "ADD") {
+    //         // Format - ADD level file_id min_key max_key size
+    //         if (ss >> level_num >> file_id >> min_key >> max_key >> size) {
+    //             if (level_num < 0 || level_num >= levels_.size()) {
+    //                 std::cerr << "history Error: invalid level " << level_num << " in line: " << line << std::endl; 
+    //                 continue;
+    //             }
+    //             std::string file_path = getFilePath(level_num, file_id);
+    //             // check if the file exists on disk
+    //             if (!std::filesystem::exists(file_path)) {
+    //                 std::cerr << "history Error: file " << file_path << " not found but listed in history!" << std::endl;
+    //                 // Should I skip or error out here?
+    //                 continue;
+    //             }
+
+    //             auto sstable = std::make_shared<SSTable>(level_num, file_path);
+    //             // load into metadata using history log parsed
+    //             sstable->min_key_ = min_key;
+    //             sstable->max_key_ = max_key;
+    //             sstable->size_ = size;
+    //             sstable->data_loaded_ = false;
+
+    //             active_tables[level_num][file_id] = sstable;
+    //             if (file_id > max_seen_id) {
+    //                 max_seen_id = file_id;
+    //             }
+    //         } else {
+    //              std::cerr << "history: bad add on line " << line << std::endl;
+    //         }
+    //     } else if (command == "REMOVE") {
+    //     // might have crashed before logging additions if so remove ref
+    //         if (ss >> level_num >> file_id) {
+    //             if (active_tables.count(level_num)) {
+    //                 active_tables[level_num].erase(file_id);
+    //             }
+    //         } else {
+    //             std::cerr << "history bad REMOVE: " << line << std::endl;
+    //         }
+    //     } else if (command == "NEXT_ID") {
+    //         // Format - NEXT_ID id_value
+    //         if (ss >> next_id_val) {
+    //             next_file_id_ = next_id_val;
+    //         } else {
+    //             std::cerr << "history bad NEXT_ID: " << line << std::endl;
+    //         }
+    //     } else {
+    //         if (!line.empty() && line[0] != '#') {
+    //             std::cerr << "history Unknown command '" << command << ": " << line << std::endl;
+    //         }
+    //     }
+    // }
+
+    // infile.close();
+
+    // //populate LSM tree levels_ from the processed active_tables map
+    // for (auto const& [level_idx, tables_map] : active_tables) {
+    //     if (level_idx >= 0 && level_idx < levels_.size()) {
+    //         for (auto const& [f_id, sstable_ptr] : tables_map) {
+    //             levels_[level_idx]->addSSTable(sstable_ptr);
+    //             std::cout << "[LSMTree] loaded SSTable " << sstable_ptr->file_path_ << " to level " << level_idx << std::endl;
+    //         }
+    //         // do i need to sort tables? (L0 by creation time/ID, L1+ by key range)
+    //     }
+    // }
+
+    //  // adjust the next_file_id_
+    // if (next_file_id_ <= max_seen_id) {
+    //     std::cout << "[LSMTree Load] Adjusting next_file_id_ from " << next_file_id_ << " to " << (max_seen_id + 1) << std::endl;
+    //     next_file_id_ = max_seen_id + 1;
+    // }
+    // if (next_file_id_ == 0) {
+    //     next_file_id_ = 1;
+    // }
+
+    // std::cout << "[LSMTree] State loaded. Next file ID will be: " << next_file_id_ << std::endl;
+}
+
+void LSMTree::updateHistory(
+    const std::vector<std::shared_ptr<SSTable>>& to_remove_l,
+    const std::vector<std::shared_ptr<SSTable>>& to_remove_l_next,
+    const std::vector<std::shared_ptr<SSTable>>& to_add_l_next) {
+
+//     std::string history_temp_path = history_path_ + ".tmp";
+//     std::ofstream outfile(history_temp_path);
+//     if (!outfile) {
+//         std::cerr << "[LSMTree] error opening history temp file " << history_temp_path << std::endl;
+//         return;
+//     }
+
+//     // write current state to temp file
+//     for (const auto& level_ptr : levels_) {
+//         const auto current_tables = level_ptr->getSSTables();
+//         for (const auto& table : current_tables) {
+//             // Check if this table is not being removed in current operation
+//             bool being_removed = false;
+//             for(const auto& rem_t : to_remove_l) if (rem_t == table) being_removed = true;
+//             if (!being_removed) {
+//                 for(const auto& rem_t : to_remove_l_next) {
+//                     if (rem_t == table) {
+//                         being_removed = true;
+//                     }
+//                 }
+//             }
+
+//             if (!being_removed) {
+//                 uint64_t file_id = std::stoull(std::filesystem::path(table->file_path_).stem().string());
+//                 outfile << "ADD " << table->level_num_ << " " << file_id << " "
+//                        << table->min_key_ << " " << table->max_key_ << " " << table->size_ << "\n";
+//             }
+//         }
+//     }
+//     // new additions
+//     for (const auto& table : to_add_l_next) {
+//         if (table) {
+//             uint64_t file_id = std::stoull(std::filesystem::path(table->file_path_).stem().string());
+//             outfile << "ADD " << table->level_num_ << " " << file_id << " "
+//                    << table->min_key_ << " " << table->max_key_ << " " << table->size_ << "\n";
+//         }
+//     }
+//     // write next_id
+//     outfile << "NEXT_ID " << next_file_id_ << "\n";
+//     outfile.flush();
+//     outfile.close();
+//     int fd = open(temp_manifest_path.c_str(), O_WRONLY);
+//     if (fd != -1) { fsync(fd); close(fd); }
+
+//     if (outfile.fail()) {
+//         std::cerr << "failed to write or close temp History: " << temp_manifest_path << std::endl;
+//         std::filesystem::remove(temp_manifest_path);
+//         throw std::runtime_error("Failed write during History update");
+//     }
+
+//     // replace the original history file with the temp file
+//     std::error_code ec;
+//     std::filesystem::rename(temp_manifest_path, manifest_path_, ec);
+//     if (ec) {
+//         throw std::runtime_error("Failed atomic history update via rename");
+//     }
+
+//     std::cout << "[LSMTree] atomic rename of history." << std::endl;
+// }
+
+// void LSMTree::updateManifestAdd(std::shared_ptr<SSTable> new_table) {
+//     // Call the main update function with empty removal lists
+//     std::vector<std::shared_ptr<SSTable>> empty_removals;
+//     std::vector<std::shared_ptr<SSTable>> additions = {new_table};
+//     updateHistory(empty_removals, empty_removals, additions);
+// }
 
 // can't print otherwise with the mutexes and unique_ptrs
 std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {

@@ -82,7 +82,7 @@ class SSTable {
 
     // check if Key is in range of SSTable
     bool keyInRange(long key) const;
-    bool keyInSSTable(long key) const;
+    bool keyInSSTable(long key);
     std::optional<DataPair> getDataPair(long key);
 };
 
@@ -191,8 +191,7 @@ class LSMTree {
     // set up DB directory and history
     void setupDB();
     void loadHistory();
-    void updateHistory();
-    void updateHistoryCompaction(const std::vector<std::shared_ptr<SSTable>>& to_remove_l,
+    void updateHistory(const std::vector<std::shared_ptr<SSTable>>& to_remove_l,
                        const std::vector<std::shared_ptr<SSTable>>& to_remove_l_next,
                        const std::vector<std::shared_ptr<SSTable>>& to_add_l_next);
     void updateHistoryAdd(std::shared_ptr<SSTable> new_sstable);
