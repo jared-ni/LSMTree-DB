@@ -257,12 +257,11 @@ void test_lsm_tree() {
     assert(lsm_tree.levels_[2]->cur_table_count_ == 2);
 }
 
-
 int main() {
-    // test_datapair();
-    // test_sstable();
-    // test_level();
-    // test_buffer();
+    test_datapair();
+    test_sstable();
+    test_level();
+    test_buffer();
     test_lsm_tree();
     std::cout << "All tests passed!" << std::endl;
     return 0;
