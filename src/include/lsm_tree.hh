@@ -7,6 +7,12 @@
 #include <map>
 #include <mutex>
 #include <shared_mutex>
+// persistence
+#include <filesystem>
+#include <sstream>
+#include <iomanip>
+#include <atomic>
+#include <fstream>
 
 #define BUFFER_CAPACITY 10
 #define BASE_LEVEL_TABLE_CAPACITY 5
@@ -50,25 +56,34 @@ struct LevelSnapshot {
 
 class SSTable {
     public:
-    SSTable(const std::vector<DataPair>& data, 
-                     int level_num);
-                    //  const std::string& file_name);
+    SSTable(const std::vector<DataPair>& data, int level_num, 
+            const std::string& file_name);
+    // prepare for log loading
+    SSTable(int level_num, const std::string& file_path);
 
-    // std::string file_name_;
+    std::string file_path_;
+
     int level_num_;
 
     long min_key_;
     long max_key_;
     size_t size_;
 
+    // persistence:
+    // maybe use lazy-loading, only load data when needed
     std::vector<DataPair> table_data_;
+    bool data_loaded_;
+
+    bool writeToDisk() const;
+    bool loadFromDisk();
+    // end persistence
 
     void printSSTable() const;
 
     // check if Key is in range of SSTable
     bool keyInRange(long key) const;
     bool keyInSSTable(long key) const;
-    std::optional<DataPair> getDataPair(long key) const;
+    std::optional<DataPair> getDataPair(long key);
 };
 
 // each level of the LSM Tree
@@ -135,7 +150,11 @@ class LSMTree {
             size_t total_levels = MAX_LEVELS, 
             size_t level_size_ratio = LEVEL_SIZE_RATIO);
 
+    // directory with levels that are folders
     std::string db_path_;
+
+    std::string history_path_;
+    std::atomic<uint64_t> next_file_id_{1};
 
     size_t buffer_capacity_;
     size_t base_level_table_capacity_;
@@ -168,8 +187,20 @@ class LSMTree {
     // protects all flush: only one thread can flush at a time
     std::mutex flush_mutex_;
     std::mutex compaction_mutex_;
-};
 
+    // set up DB directory and history
+    void setupDB();
+    void loadHistory();
+    void updateHistory();
+    void updateHistoryCompaction(const std::vector<std::shared_ptr<SSTable>>& to_remove_l,
+                       const std::vector<std::shared_ptr<SSTable>>& to_remove_l_next,
+                       const std::vector<std::shared_ptr<SSTable>>& to_add_l_next);
+    void updateHistoryAdd(std::shared_ptr<SSTable> new_sstable);
+    std::string getLevelPath(int level_num) const;
+    std::string getFilePath(int level_num, int file_id) const;
+    // delete physical file of an SSTable
+    void deleteSSTableFile(const std::shared_ptr<SSTable>& sstable);
+};
 
 struct MergeEntry {
     DataPair data;

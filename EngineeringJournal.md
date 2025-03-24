@@ -68,3 +68,9 @@ Fence pointers:
 
 Bloom Filters: 
 - 
+
+3/24:
+- Ok for persistence, I need: 
+    - 1 disk file per SSTable
+    - 1 folder per level 
+    - track all changes in a log file so the data is recoverable

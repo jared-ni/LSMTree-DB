@@ -3,6 +3,14 @@
 #include <queue>
 #include <algorithm> 
 
+
+// helper function to generate SSTable filename
+inline std::string generateSSTableFilename(uint64_t file_id) {
+    std::stringstream ss;
+    ss << std::setw(6) << std::setfill('0') << file_id << ".sst";
+    return ss.str();
+}
+
 /**
  * DataPair methods
  */
@@ -28,11 +36,12 @@ bool DataPair::operator==(const DataPair& other) const {
 /**
  * SSTable methods
  */
-SSTable::SSTable(const std::vector<DataPair>& data, int level_num) {
-                // const std::string& file_name) {
-    // this->file_name_ = file_name;
-    this->level_num_ = level_num;
+SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
+                 const std::string& file_path) {
     this->table_data_ = data;
+    this->level_num_ = level_num;
+    this->file_path_ = file_path;
+    this->data_loaded_ = true;
 
     // set min and max key
     if (data.empty()) {
@@ -48,6 +57,84 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num) {
     }
 }
 
+SSTable::SSTable(int level_num, const std::string& file_path) {
+    this->level_num_ = level_num;
+    this->file_path_ = file_path;
+    this->size_ = 0;
+    this->data_loaded_ = false;
+    std::cout << "[SSTable] placeholder for file: " << file_path_ << std::endl;
+}
+
+// persistence on SSTable
+bool SSTable::writeToDisk() const {
+    // parent directory must exist
+    std::ofstream outfile(file_path_);
+    if (!outfile) {
+        std::cerr << "[SSTable] error opening write file " << file_path_ << std::endl;
+        return false;
+    }
+
+    // key:value:tombstone per line
+    for (const auto& pair : table_data_) {
+        outfile << pair.key_ << ":" << pair.value_ << ":" << (pair.deleted_ ? 1 : 0) << "\n";
+    }
+    outfile.close();
+    return !outfile.fail();
+}
+
+
+bool SSTable::loadFromDisk() {
+    if (data_loaded_) {
+        return true;
+    }
+    std::cout << "[SSTable] lazy loading from: " << file_path_ << std::endl;
+    std::ifstream infile(file_path_);
+    if (!infile) {
+        std::cerr << "[SSTable] can't open " << file_path_ << std::endl;
+        return false;
+    }
+    // clean slate
+    table_data_.clear();
+    std::string line;
+    long key, value;
+    int deleted_int;
+    char colon1, colon2;
+
+    while (std::getline(infile, line)) {
+        std::stringstream ss(line);
+        // parse the line in format key:value:deleted
+        if (ss >> key >> colon1 >> value >> colon2 >> deleted_int && colon1 == ':' && colon2 == ':') {
+            table_data_.emplace_back(key, value, deleted_int == 1);
+        } else {
+            std::cerr << "SSTable] parsing error: " << file_path_ << ": " << line << std::endl;
+            table_data_.clear();
+            infile.close();
+            return false;
+        }
+    }
+
+    infile.close();
+
+    if (table_data_.empty()) {
+        if (size_ != 0) {
+            std::cerr << "loaded empty table " << file_path_ << " but size was " << size_ << std::endl;
+        }
+        size_ = 0;
+        min_key_ = std::numeric_limits<long>::max();
+        max_key_ = std::numeric_limits<long>::min();
+    } else {
+        // TODO: is it guaranteed to be sorted?
+        size_ = table_data_.size();
+        min_key_ = table_data_.front().key_;
+        max_key_ = table_data_.back().key_;
+        // need to add validation for sorted data
+    }
+    data_loaded_ = true;
+    return !infile.fail();
+}
+
+
+
 void SSTable::printSSTable() const {
     for (int i = 0; i < table_data_.size(); i++) {
         std::cout << table_data_[i].key_ << ":" << table_data_[i].value_ << ", ";
@@ -60,18 +147,26 @@ void SSTableSnapshot::printSSTable() const {
     }
 }
 
-std::optional<DataPair> SSTable::getDataPair(long key) const {
+std::optional<DataPair> SSTable::getDataPair(long key) {
     if (!keyInRange(key)) {
         return std::nullopt;
     }
 
-    for (const auto& pair : table_data_) {
-        if (pair.key_ == key) {
-            if (pair.deleted_) {
-                return std::nullopt;
-            } else {
-                return pair;
-            }
+    // persistence check: if data not loaded, load from disk
+    if (!data_loaded_) {
+        // load from disk
+        if (!loadFromDisk()) {
+            std::cerr << "[SSTable] failed to load SSTable from disk: " << file_path_ << std::endl;
+            return std::nullopt;
+        }
+    }
+    // replace with binary search
+    auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
+    if (it != table_data_.end() && it->key_ == key) {
+        if (it->deleted_) {
+            return std::nullopt;
+        } else {
+            return *it;
         }
     }
     return std::nullopt;
@@ -81,6 +176,7 @@ bool SSTable::keyInRange(long key) const {
     return key >= min_key_ && key <= max_key_;
 }
 
+// TODO: 
 bool SSTable::keyInSSTable(long key) const {
     if (!keyInRange(key)) { return false; }
 
