@@ -74,3 +74,7 @@ Bloom Filters:
     - 1 disk file per SSTable
     - 1 folder per level 
     - track all changes in a log file so the data is recoverable
+
+3/25: 
+- Changed to tiering
+- flush when we reach capacity, not when we exceed it, is much simpler

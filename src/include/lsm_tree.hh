@@ -19,6 +19,7 @@
 #define LEVEL_SIZE_RATIO 10 // how much bigger l1 is than l0
 #define MAX_LEVELS 7
 #define MAX_ENTRIES_PER_LEVEL 512
+#define MAX_TABLE_SIZE 1000000
 
 class DataPair {
     public:

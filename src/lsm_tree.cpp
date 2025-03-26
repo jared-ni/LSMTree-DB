@@ -605,18 +605,18 @@ void LSMTree::updateHistory(
 //     outfile << "NEXT_ID " << next_file_id_ << "\n";
 //     outfile.flush();
 //     outfile.close();
-//     int fd = open(temp_manifest_path.c_str(), O_WRONLY);
+//     int fd = open(temp_history_path.c_str(), O_WRONLY);
 //     if (fd != -1) { fsync(fd); close(fd); }
 
 //     if (outfile.fail()) {
-//         std::cerr << "failed to write or close temp History: " << temp_manifest_path << std::endl;
-//         std::filesystem::remove(temp_manifest_path);
+//         std::cerr << "failed to write or close temp History: " << temp_history_path << std::endl;
+//         std::filesystem::remove(temp_history_path);
 //         throw std::runtime_error("Failed write during History update");
 //     }
 
 //     // replace the original history file with the temp file
 //     std::error_code ec;
-//     std::filesystem::rename(temp_manifest_path, manifest_path_, ec);
+//     std::filesystem::rename(temp_history_path, history_path, ec);
 //     if (ec) {
 //         throw std::runtime_error("Failed atomic history update via rename");
 //     }
@@ -624,7 +624,7 @@ void LSMTree::updateHistory(
 //     std::cout << "[LSMTree] atomic rename of history." << std::endl;
 // }
 
-// void LSMTree::updateManifestAdd(std::shared_ptr<SSTable> new_table) {
+// void LSMTree::updateHistoryAdd(std::shared_ptr<SSTable> new_table) {
 //     // Call the main update function with empty removal lists
 //     std::vector<std::shared_ptr<SSTable>> empty_removals;
 //     std::vector<std::shared_ptr<SSTable>> additions = {new_table};
@@ -702,22 +702,23 @@ void LSMTree::flushBuffer() {
         return;
     }
 
-    // trigger compaction check before adding to Level 0 in memory
-    checkCompaction(0);
-
     // add the new SSTable pointer to level 0's list
     levels_[0]->addSSTable(sstable_ptr);
+
+    // trigger compaction check before adding to Level 0 in memory
+    checkCompaction(0);
 
     std::cout << "[LSMTree] Flushed SSTable " << new_file_id << " to Level 0" << std::endl;
     // levels_[0]->printLevel();
 }
 
 bool LSMTree::putData(const DataPair& data) {
+    bool rt = buffer_->putData(data);
     // if level is full, flush. put data in buffer either way
     if (buffer_->isFull()) {
         flushBuffer();
     }
-    bool rt = buffer_->putData(data);
+
     return rt;
 }
 
@@ -789,14 +790,18 @@ bool LSMTree::checkCompaction(size_t level_index) {
     return true;
 }
 
-
+// basic tiering
 void LSMTree::compactLevel(size_t level_index) {
     // TODO: coarse grained lock for now
     // std::lock_guard<std::mutex> compaction_lock(compaction_mutex_);
+
+    // Check needsCompaction status within the lock if using fine-grained locking later.
+    // For now, we re-check, similar to before.
     {
         // std::shared_lock<std::shared_mutex> lock(levels_[level_index]->mutex_);
+        // Use the existing needsCompaction which might use >= threshold
         if (!levels_[level_index]->needsCompaction()) {
-            std::cout << "[LSMTree] Race condition: compaction for Level " << level_index << " is not needed?" << std::endl;
+            std::cout << "[LSMTree] Race condition or no longer needs compaction for Level " << level_index << ". Skipping." << std::endl;
             return;
         }
     }
@@ -804,98 +809,80 @@ void LSMTree::compactLevel(size_t level_index) {
     size_t next_level_index = level_index + 1;
     if (next_level_index >= levels_.size()) {
         std::cout << "[LSMTree] Level " << level_index << " is the last level, no compaction" << std::endl;
-        // what do I do in this case?
-        // TODO: Implement last level compaction strategy (e.g., merge within level)
+        // Tiered compaction usually stops at the last level or has a different strategy there.
+        // For now, we just stop.
         return;
     }
 
-    std::cout << "[LSMTree] starting compaction for level " << level_index << " to level " << next_level_index << std::endl;
+    std::cout << "[LSMTree Tiered] starting compaction for level " << level_index << " into level " << next_level_index << std::endl;
 
     // compaction participants
     std::vector<std::shared_ptr<SSTable>> input_tables_level;
-    std::vector<std::shared_ptr<SSTable>> input_tables_level_next; 
+    std::vector<std::shared_ptr<SSTable>> input_tables_level_next; // Will remain empty for basic tiering
 
-    { // Scope for shared locks to read level contents
-        // std::shared_lock<std::shared_mutex> l1Lock(levels_[level_index]->mutex_);
-        // std::shared_lock<std::shared_mutex> l2Lock(levels_[next_level_index]->mutex_);
+    { // Scope for reading level contents (needs locking if concurrent)
 
-        // Get all tables from the destination level *once* for overlap checks
-        // Use getSSTablesRef assuming caller (this function) manages lock lifetime
-        const auto& all_next_level_tables = levels_[next_level_index]->getSSTables();
+        // Select ALL tables from the current level (tier) for compaction
+        input_tables_level = levels_[level_index]->getSSTables();
 
-        if (level_index == 0) {
-            input_tables_level = levels_[level_index]->getSSTables();
-
-            // lookup same range tables in next level
-            for (const auto& table_L0 : input_tables_level) {
-                for (const auto& table_L1 : all_next_level_tables) {
-                    // overlap found
-                    if (table_L0->max_key_ >= table_L1->min_key_ && table_L0->min_key_ <= table_L1->max_key_) {
-                        // avoid dups, if multiple L0 tables overlap an L1 table
-                        if (std::find(input_tables_level_next.begin(),
-                            input_tables_level_next.end(), table_L1) == input_tables_level_next.end()) {
-                              input_tables_level_next.push_back(table_L1);
-                         }
-                    }
-                }
-            }
-        } else {
-            const auto& tables_L = levels_[level_index]->getSSTables();
-            if (tables_L.empty()) {
-                std::cerr << "[LSMTree] compaction triggered on empty level " << level_index << std::endl;
-                return;
-            }
-            // need oldest table first
-            input_tables_level.push_back(tables_L.front());
-            const auto& all_tables_next = levels_[next_level_index]->getSSTables();
-
-            // overlapping tables for level l+1
-            const auto& table_LN_selected = input_tables_level[0];
-            for (const auto& table_LNplus1 : all_tables_next) {
-                if (table_LN_selected->max_key_ >= table_LNplus1->min_key_ && table_LN_selected->min_key_ <= table_LNplus1->max_key_) {
-                    // input_tables_level_next should have started empty
-                    input_tables_level_next.push_back(table_LNplus1); // Add ONLY overlapping
-                }
-            }
-
+        // Ensure the level wasn't empty if needsCompaction was true
+        if (input_tables_level.empty()) {
+             std::cerr << "[LSMTree Tiered] Compaction triggered on empty level " << level_index << "? Aborting." << std::endl;
+             return;
         }
-    }
 
+        // In basic tiering, we don't select overlapping tables from the next level as direct merge input.
+        input_tables_level_next.clear();
+
+    } // End scope for reading levels
+
+
+    // Abort if somehow no tables were selected (shouldn't happen after the check above)
     if (input_tables_level.empty()) {
-        std::cout << "[LSMTree] empty source level, aborting compaction." << std::endl;
+        std::cout << "[LSMTree Tiered] No input tables selected from L" << level_index << ". Aborting." << std::endl;
         return;
     }
 
-    std::cout << "[LSMTree] Merging " << input_tables_level.size() << " tables from L" << level_index
-              << " and " << input_tables_level_next.size() << " tables from L" << next_level_index << std::endl;
+    std::cout << "[LSMTree Tiered] Merging " << input_tables_level.size() << " tables from Tier " << level_index
+              << " into Tier " << next_level_index << std::endl; // Modified log message slightly
 
-    // TODO: perform merge logic
-    std::vector<std::shared_ptr<SSTable>> output_tables = mergeSSTables(input_tables_level,
-        input_tables_level_next, next_level_index);
-        
-    if (levels_[next_level_index]->needsCompaction()) {
-        // cascade compaction
-        checkCompaction(next_level_index);
+    // Perform merge logic - mergeSSTables now takes an empty input_tables_level_next
+    std::vector<std::shared_ptr<SSTable>> output_tables;
+    try {
+        output_tables = mergeSSTables(input_tables_level,
+                                     input_tables_level_next, // Pass the empty vector
+                                     next_level_index);
+    } catch (const std::exception& e) {
+         std::cerr << "Error during tiered SSTable merge: " << e.what() << std::endl;
+         // Handle error, potentially clean up partial output files if possible
+         return; // Abort compaction on merge error
     }
 
-    // atomic replace
+
+    // atomic replace in memory
     {
         // std::unique_lock<std::shared_mutex> lock1(levels_[level_index]->mutex_);
         // std::unique_lock<std::shared_mutex> lock2(levels_[next_level_index]->mutex_);
 
-        // add and remove cuz we merged
+        // Remove ALL input tables from the current level (tier)
         levels_[level_index]->removeAllSSTables(input_tables_level);
         levels_[next_level_index]->removeAllSSTables(input_tables_level_next);
-
         for (const auto& table : output_tables) {
             levels_[next_level_index]->addSSTable(table);
         }
     }
+    // delete the SSTable files that were merged from the current level
+    for (const auto& table : input_tables_level) {
+        deleteSSTableFile(table);
+    }
 
-    std::cout << "[LSMTree] finished compaction, added " << output_tables.size()
-              << " new tables to Level " << next_level_index << "." << std::endl;
+    std::cout << "[LSMTree Tiered] finished compaction, added " << output_tables.size()
+              << " new tables to Tier " << next_level_index << "." << std::endl;
     levels_[level_index]->printLevel();
     levels_[next_level_index]->printLevel();
+
+    // after compacted this level, compact the next if needed
+    checkCompaction(next_level_index);
 }
 
 // merge function for two SSTables
@@ -908,7 +895,7 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     std::vector<std::shared_ptr<SSTable>> output_sstables;
     std::vector<DataPair> current_output_data;
     // todo: need to redefine this later
-    const size_t TARGET_SSTABLE_SIZE = buffer_capacity_; 
+    const size_t TARGET_SSTABLE_SIZE = MAX_TABLE_SIZE; 
 
     std::priority_queue<MergeEntry, std::vector<MergeEntry>, std::greater<MergeEntry>> min_heap;
 

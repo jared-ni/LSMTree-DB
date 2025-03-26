@@ -116,11 +116,10 @@ void test_sstable() {
 
         // 6. test loadFromDisk functionality (optional but good)
         // Create a new SSTable object pointing to the same file, but unloaded
-        SSTable table_to_load(1, table_path); // Use the placeholder constructor
-        // Manually set metadata as MANIFEST would normally do this
+        SSTable table_to_load(1, table_path);
         table_to_load.min_key_ = 1;
         table_to_load.max_key_ = 5;
-        table_to_load.size_ = 5; // Assume we know this
+        table_to_load.size_ = 5;
         assert(!table_to_load.data_loaded_);
         // Accessing data should trigger load
         auto loaded_pair = table_to_load.getDataPair(3);
@@ -133,10 +132,10 @@ void test_sstable() {
 
     } catch (const std::exception& e) {
         std::cerr << "SSTable with data test FAILED with exception: " << e.what() << std::endl;
-        assert(false); // Force test failure
+        assert(false);
     }
 
-    remove_temp_dir(TEMP_SSTABLE_DIR); // Clean up test files
+    remove_temp_dir(TEMP_SSTABLE_DIR);
 }
 
 // Level tests
@@ -198,7 +197,7 @@ void test_level() {
         // 3. test removeSSTable
         level.removeSSTable(sstable1);
         assert(level.cur_table_count_ == 1);
-        assert(level.cur_total_entries_ == 2); // sstable2 remains
+        assert(level.cur_total_entries_ == 2);
         assert(level.getSSTables().size() == 1);
         assert(level.getSSTables()[0] == sstable2);
         assert(!level.needsCompaction());
@@ -250,111 +249,115 @@ void test_level() {
 }
 
 // Buffer tests
-// void test_buffer() {
-//     std::cout << "[TEST] Testing Buffer ------------" << std::endl;
+void test_buffer() {
+    std::cout << "[TEST] Testing Buffer ------------" << std::endl;
 
-//     // 1. test create buffer with default capacity
-//     Buffer buffer;
-//     assert(buffer.capacity_ == BUFFER_CAPACITY);
-//     assert(buffer.cur_size_ == 0);
-//     std::cout << "Buffer constructor tests PASSED." << std::endl;
+    // 1. test create buffer with default capacity
+    Buffer buffer; // Uses default capacity defined in lsm_tree.hh
+    // assert(buffer.capacity_ == BUFFER_CAPACITY); // Check against definition if needed
+    assert(buffer.cur_size_ == 0);
+    std::cout << "Buffer constructor tests PASSED." << std::endl;
 
-//     // 2. test add data to buffer
-//     buffer.putData(DataPair(1, 10));
-//     assert(buffer.cur_size_ == 1);
-//     buffer.putData(DataPair(2, 20));
-//     assert(buffer.cur_size_ == 2);
-//     std::cout << "Buffer putData tests PASSED." << std::endl;
+    // 2. test add data to buffer
+    buffer.putData(DataPair(1, 10));
+    assert(buffer.cur_size_ == 1);
+    assert(!buffer.buffer_data_.empty() && buffer.buffer_data_[0].key_ == 1);
+    buffer.putData(DataPair(3, 30)); // Insert out of order
+    assert(buffer.cur_size_ == 2);
+    assert(buffer.buffer_data_.size() == 2);
+    assert(buffer.buffer_data_[0].key_ == 1); // Should be sorted
+    assert(buffer.buffer_data_[1].key_ == 3);
+    buffer.putData(DataPair(2, 20)); // Insert in middle
+    assert(buffer.cur_size_ == 3);
+    assert(buffer.buffer_data_.size() == 3);
+    assert(buffer.buffer_data_[0].key_ == 1);
+    assert(buffer.buffer_data_[1].key_ == 2);
+    assert(buffer.buffer_data_[2].key_ == 3);
+    std::cout << "Buffer putData (and sorting) tests PASSED." << std::endl;
 
-//     // 3. test get data from buffer
-//     std::optional<DataPair> data_pair_option;
-//     data_pair_option = buffer.getData(1);
-//     assert(data_pair_option.has_value());
-//     assert(data_pair_option.value().key_ == 1);
-//     assert(data_pair_option.value().value_ == 10);
-//     data_pair_option = buffer.getData(2);
-//     assert(data_pair_option.has_value());
-//     assert(data_pair_option.value().key_ == 2);
-//     assert(data_pair_option.value().value_ == 20);
-//     data_pair_option = buffer.getData(3);
-//     assert(!data_pair_option.has_value());
-//     std::cout << "Buffer getData tests PASSED." << std::endl;
+    // 3. test get data from buffer
+    std::optional<DataPair> data_pair_option;
+    data_pair_option = buffer.getData(1);
+    assert(data_pair_option.has_value());
+    assert(data_pair_option.value().key_ == 1);
+    assert(data_pair_option.value().value_ == 10);
+    data_pair_option = buffer.getData(2);
+    assert(data_pair_option.has_value());
+    assert(data_pair_option.value().key_ == 2);
+    assert(data_pair_option.value().value_ == 20);
+    data_pair_option = buffer.getData(4); // Key not present
+    assert(!data_pair_option.has_value());
+    std::cout << "Buffer getData tests PASSED." << std::endl;
 
-//     // 4. test put same key in buffer
-//     assert(buffer.getData(1).value().value_ == 10);
-//     buffer.putData(DataPair(1, 100));
-//     assert(buffer.cur_size_ == 2);
-//     assert(buffer.getData(1).value().value_ == 100);
-//     std::cout << "Buffer put same key tests PASSED." << std::endl;
-// }
+    // 4. test put same key in buffer (update)
+    assert(buffer.getData(1).value().value_ == 10);
+    buffer.putData(DataPair(1, 100));
+    assert(buffer.cur_size_ == 3);
+    assert(buffer.getData(1).value().value_ == 100);
+    std::cout << "Buffer put same key (update) tests PASSED." << std::endl;
+}
 
 // LSM Tree tests
-// void test_lsm_tree() {
-//     std::cout << "[TEST] testing LSMTree ------------" << std::endl;
-//     // Use smaller caps
-//     const size_t TEST_BUFFER_CAP = 2;
-//     const size_t BASE_LEVEL_TABLE_CAP = 2; // for l0
-//     const size_t TEST_LEVEL_RATIO = 1; // l1 is 2* 2 = 4
-//     const size_t total_levels = 4;
+// LSM Tree tests
+void test_lsm_tree() {
+    std::cout << "[TEST] testing LSMTree ------------" << std::endl;
+    const std::string lsm_test_dir = "test_db_simple"; // Directory for this test
 
-//     // 1. create LSMTree
-//     LSMTree lsm_tree("test_db_simple", 
-//                     TEST_BUFFER_CAP, 
-//                     BASE_LEVEL_TABLE_CAP, 
-//                     total_levels, 
-//                     TEST_LEVEL_RATIO);
-//     std::cout << "LSMTree created with BufferCap=" << TEST_BUFFER_CAP
-//               << ", L0TableCap=" << BASE_LEVEL_TABLE_CAP << std::endl;
+    remove_temp_dir(lsm_test_dir);
 
-//     // 2. initial Puts (Fill Buffer)
-//     lsm_tree.putData({1, 100}); // {1}
-//     lsm_tree.putData({2, 200}); // {1, 2}
-//     assert(lsm_tree.buffer_->cur_size_ == 2);
-//     lsm_tree.putData({3, 150}); // flush to l0, {3}, l0 = 1 table
-//     assert(lsm_tree.buffer_->cur_size_ == 1);
-//     assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
-//     lsm_tree.putData({4, 250}); // {3, 4}
+    const size_t TEST_BUFFER_CAP = 2;
+    const size_t BASE_LEVEL_TABLE_CAP = 2;
+    // Level Ratio = 1 means L0 cap=2, L1 cap=2, L2 cap=2, L3 cap=2 (trigger on 3rd)
+    const size_t TEST_LEVEL_RATIO = 1;
+    const size_t total_levels = 4;
 
-//     lsm_tree.buffer_->printBuffer();
-//     lsm_tree.levels_[0]->printLevel();
-//     lsm_tree.levels_[1]->printLevel();
+    // 1. create LSMTree
+    LSMTree lsm_tree(lsm_test_dir,
+                    TEST_BUFFER_CAP,
+                    BASE_LEVEL_TABLE_CAP, // This is the threshold-1 for '>' trigger
+                    total_levels,
+                    TEST_LEVEL_RATIO);
+    std::cout << "LSMTree created with BufferCap=" << TEST_BUFFER_CAP
+                << ", L0TableThreshold=" << BASE_LEVEL_TABLE_CAP // Compaction when count > this
+                << ", LevelRatio=" << TEST_LEVEL_RATIO << std::endl;
 
-//     lsm_tree.putData({5, 300}); // {5}, l0 = 2 tables
-//     lsm_tree.putData({6, 350}); // {5, 6}
-//     assert(lsm_tree.levels_[0]->cur_table_count_ == 2);
+    // Check initial state
+    assert(lsm_tree.buffer_->cur_size_ == 0);
+    for(size_t i = 0; i < total_levels; ++i) { assert(lsm_tree.levels_[i]->cur_table_count_ == 0); }
+    assert(lsm_tree.next_file_id_ == 1);
 
-//     lsm_tree.putData({7, 400});
-//     lsm_tree.putData({8, 450}); 
-//     lsm_tree.putData({9, 500}); 
-//     lsm_tree.putData({10, 550});
-//     lsm_tree.putData({11, 600}); // {11}, l0 = 1 table, l1 = 2 tables
-//     lsm_tree.putData({12, 650}); // {11, 12}
-//     lsm_tree.putData({13, 700}); // flush to l0, {13}, l0 2 table, l1 2 tables
-//     lsm_tree.putData({14, 750}); // {13, 14}
-//     lsm_tree.putData({15, 800}); // {15}, l0 1 table, l1 1 tables, l2 1 table
-//     lsm_tree.putData({16, 850}); // {15, 16}
-//     lsm_tree.putData({17, 900}); // {17}, l0 2 table, l1 1 table, l2 1 table
-//     lsm_tree.putData({18, 950}); // {17, 18}
-//     lsm_tree.putData({19, 1000}); // {19}, l0 1 table, l1 2 table, l2 2 table
+    // 2. initial Puts (Fill Buffer)
+    lsm_tree.putData({1, 100}); // {1}
+    lsm_tree.putData({2, 200}); // {1, 2}
+    assert(lsm_tree.buffer_->cur_size_ == 0);
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
 
-//     std::cout << "after 19, 1000" << std::endl;
-//     lsm_tree.buffer_->printBuffer();
-//     lsm_tree.levels_[0]->printLevel();
-//     lsm_tree.levels_[1]->printLevel();
-//     lsm_tree.levels_[2]->printLevel();
-//     lsm_tree.levels_[3]->printLevel();
+    lsm_tree.putData({3, 300}); // {3}
+    assert(lsm_tree.buffer_->cur_size_ == 1);
+    lsm_tree.putData({4, 400}); // {}, l0 has 0 tables, l1 has 1 table
+    assert(lsm_tree.buffer_->cur_size_ == 0); 
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
+    assert(lsm_tree.levels_[1]->cur_table_count_ == 1);
 
-//     assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
-//     assert(lsm_tree.levels_[1]->cur_table_count_ == 2);
-//     assert(lsm_tree.levels_[2]->cur_table_count_ == 2);
-// }
+    lsm_tree.putData({5, 500}); // {5}
+    lsm_tree.putData({6, 600}); // {}, l0 has 1 table, l1 has 2 tables
+    lsm_tree.putData({7, 700}); // {7}
+    lsm_tree.putData({8, 800}); // {}, l0 has 0 tables, l1 has 0 tables, l2 has 1 table
+    assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
+    assert(lsm_tree.levels_[1]->cur_table_count_ == 0);
+    assert(lsm_tree.levels_[2]->cur_table_count_ == 1);
+
+    remove_temp_dir(lsm_test_dir);
+     std::cout << "Cleaned up test directory: " << lsm_test_dir << std::endl;
+}
+
 
 int main() {
     test_datapair();
     test_sstable();
     test_level();
-    // test_buffer();
-    // test_lsm_tree();
+    test_buffer();
+    test_lsm_tree();
     std::cout << "All tests passed!" << std::endl;
     return 0;
 }
