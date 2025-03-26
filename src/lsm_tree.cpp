@@ -57,6 +57,11 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
         min_key_ = data.front().key_;
         max_key_ = data.back().key_;
     }
+
+    // writeToDisk
+    if (!writeToDisk()) {
+        throw std::runtime_error("Failed to persist SSTable to disk");
+    }
 }
 
 SSTable::SSTable(int level_num, const std::string& file_path) {
@@ -84,7 +89,7 @@ bool SSTable::writeToDisk() const {
     return !outfile.fail();
 }
 
-
+//persistence
 bool SSTable::loadFromDisk() {
     if (data_loaded_) {
         return true;
@@ -92,7 +97,7 @@ bool SSTable::loadFromDisk() {
     std::cout << "[SSTable] lazy loading from: " << file_path_ << std::endl;
     std::ifstream infile(file_path_);
     if (!infile) {
-        std::cerr << "[SSTable] can't open " << file_path_ << std::endl;
+        std::cerr << "[SSTable ERROR] Could not open file for reading: " << file_path_ << " (Error: " << strerror(errno) << ")" << std::endl; // Include system error
         return false;
     }
     // clean slate
@@ -101,38 +106,57 @@ bool SSTable::loadFromDisk() {
     long key, value;
     int deleted_int;
     char colon1, colon2;
+    int line_num = 0;
 
     while (std::getline(infile, line)) {
+        line_num++;
+        // Skip empty lines silently
+        if (line.empty()) {
+            continue;
+        }
+
         std::stringstream ss(line);
         // parse the line in format key:value:deleted
         if (ss >> key >> colon1 >> value >> colon2 >> deleted_int && colon1 == ':' && colon2 == ':') {
+             char remaining_char;
+             if (ss >> remaining_char) {
+                std::cerr << "[SSTable ERROR] Parsing error: Trailing characters found on line " << line_num << " in " << file_path_ << ": '" << line << "'" << std::endl;
+                table_data_.clear();
+                infile.close();
+                return false;
+             }
+            // Successfully parsed
             table_data_.emplace_back(key, value, deleted_int == 1);
         } else {
-            std::cerr << "SSTable] parsing error: " << file_path_ << ": " << line << std::endl;
+            std::cerr << "[SSTable ERROR] Parsing error on line " << line_num << " in " << file_path_ << ": '" << line << "'" << std::endl;
             table_data_.clear();
             infile.close();
             return false;
         }
     }
 
+    // Check stream state AFTER the loop for non-parsing IO errors
+    if (infile.bad()) {
+         std::cerr << "[SSTable ERROR] File stream badbit set after reading: " << file_path_ << std::endl;
+         infile.close();
+         table_data_.clear(); // Data is likely corrupted
+         return false;
+    }
     infile.close();
-
+    // metadata update after loading
     if (table_data_.empty()) {
-        if (size_ != 0) {
-            std::cerr << "loaded empty table " << file_path_ << " but size was " << size_ << std::endl;
-        }
+        std::cout << "[SSTable] warning: Loaded empty table data from " << file_path_ << std::endl;
         size_ = 0;
         min_key_ = std::numeric_limits<long>::max();
         max_key_ = std::numeric_limits<long>::min();
     } else {
-        // TODO: is it guaranteed to be sorted?
         size_ = table_data_.size();
         min_key_ = table_data_.front().key_;
         max_key_ = table_data_.back().key_;
-        // need to add validation for sorted data
+        std::cout << "[SSTable] successfully loaded " << size_ << " entries from " << file_path_ << std::endl;
     }
     data_loaded_ = true;
-    return !infile.fail();
+    return true;
 }
 
 
@@ -315,17 +339,17 @@ void Buffer::printBuffer() const {
     std::cout << std::endl;
 }
 
-std::shared_ptr<SSTable> Buffer::flushBuffer() {
-    if (buffer_data_.empty()) {
-        return nullptr;
-    }
-    // // create new SSTable with buffer_data_
-    auto sstable_ptr = std::make_shared<SSTable>(buffer_data_, 0);
-    // clear buffer
-    buffer_data_.clear();
-    cur_size_ = 0;
-    return sstable_ptr;
-}
+// std::shared_ptr<SSTable> Buffer::flushBuffer() {
+//     if (buffer_data_.empty()) {
+//         return nullptr;
+//     }
+//     // // create new SSTable with buffer_data_
+//     auto sstable_ptr = std::make_shared<SSTable>(buffer_data_, 0);
+//     // clear buffer
+//     buffer_data_.clear();
+//     cur_size_ = 0;
+//     return sstable_ptr;
+// }
 
 // buffer is sorted, so flush to level 1 is much easier
 bool Buffer::putData(const DataPair& data) {
@@ -605,7 +629,7 @@ void LSMTree::updateHistory(
 //     std::vector<std::shared_ptr<SSTable>> empty_removals;
 //     std::vector<std::shared_ptr<SSTable>> additions = {new_table};
 //     updateHistory(empty_removals, empty_removals, additions);
-// }
+}
 
 // can't print otherwise with the mutexes and unique_ptrs
 std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
@@ -651,15 +675,41 @@ void LSMTree::flushBuffer() {
     // lock mutex
     // std::lock_guard<std::mutex> lock(flush_mutex_);
     // flush buffer to level 0
-    std::shared_ptr<SSTable> sstable_ptr = buffer_->flushBuffer();
-    if (sstable_ptr == nullptr) {
+    if (buffer_->buffer_data_.empty()) {
         return;
-    } 
-    // check compaction before adding new sstable to l0
-    bool compacted = checkCompaction(0);
+    }
+    std::cout << "[LSMTree] Flushing buffer..." << std::endl;
 
-    // flush L0 buffer to L1
+    // data from buffer
+    std::vector<DataPair> data_to_flush = buffer_->buffer_data_;
+    buffer_->buffer_data_.clear();
+    buffer_->cur_size_ = 0;
+
+    // generate new level 0 SSTable id and file path
+    uint64_t new_file_id = next_file_id_++;
+    std::string new_file_path = getFilePath(0, new_file_id);
+
+    std::shared_ptr<SSTable> sstable_ptr = nullptr;
+    try {
+        // create the SSTable object and write to disk
+        sstable_ptr = std::make_shared<SSTable>(data_to_flush, 0, new_file_path);
+        std::cout << "[LSMTree] flushed buffer to new SSTable file: " << new_file_path << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "can't create/write SSTable during flush: " << e.what() << std::endl;
+        // If file creation failed revert file id
+        next_file_id_--;
+        // maybe throw error here? idk
+        return;
+    }
+
+    // trigger compaction check before adding to Level 0 in memory
+    checkCompaction(0);
+
+    // add the new SSTable pointer to level 0's list
     levels_[0]->addSSTable(sstable_ptr);
+
+    std::cout << "[LSMTree] Flushed SSTable " << new_file_id << " to Level 0" << std::endl;
+    // levels_[0]->printLevel();
 }
 
 bool LSMTree::putData(const DataPair& data) {
@@ -671,7 +721,7 @@ bool LSMTree::putData(const DataPair& data) {
     return rt;
 }
 
-std::optional<DataPair> LSMTree::getData(long key) const {
+std::optional<DataPair> LSMTree::getData(long key) {
     // search buffer first
     std::optional<DataPair> data_pair = buffer_->getData(key);
     if (data_pair.has_value()) {
@@ -683,11 +733,10 @@ std::optional<DataPair> LSMTree::getData(long key) const {
     }
     // search levels next: 
     // TODO: add bloom filter each level
+
     for (size_t level_i = 0; level_i < levels_.size(); level_i++) {
         const auto& cur_level = levels_[level_i];
         // skip level if bloom filter says key not in level
-
-        // lock read
         const auto& cur_sstables = cur_level->getSSTables();
         for (const auto& cur_sstable : cur_sstables) {
             // check range: if not in range, continue
@@ -707,6 +756,20 @@ std::optional<DataPair> LSMTree::getData(long key) const {
         }
     }
     return std::nullopt;
+}
+
+// persistence
+void LSMTree::deleteSSTableFile(const std::shared_ptr<SSTable>& sstable) {
+    if (!sstable || sstable->file_path_.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::remove(sstable->file_path_, ec)) {
+        std::cout << "[LSMTree] delete SSTable file: " << sstable->file_path_ << std::endl;
+    } else {
+        std::cerr << "Warning: fail to delete SSTable file " << sstable->file_path_ << ": " << ec.message() << std::endl;
+    }
 }
 
 
@@ -839,76 +902,95 @@ void LSMTree::compactLevel(size_t level_index) {
 // TODO: merge logic not optimized
 std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     const std::vector<std::shared_ptr<SSTable>>& level_l_tables,
-    const std::vector<std::shared_ptr<SSTable>>& level_l_plus_1_tables, int output_level_num) {
+    const std::vector<std::shared_ptr<SSTable>>& level_l_plus_1_tables,
+    int output_level_num) {
 
     std::vector<std::shared_ptr<SSTable>> output_sstables;
     std::vector<DataPair> current_output_data;
+    // todo: need to redefine this later
+    const size_t TARGET_SSTABLE_SIZE = buffer_capacity_; 
 
-    const size_t TARGET_SSTABLE_SIZE = 100;
-    // use a minheap to merge, like the lc problem
     std::priority_queue<MergeEntry, std::vector<MergeEntry>, std::greater<MergeEntry>> min_heap;
 
     std::vector<std::shared_ptr<SSTable>> all_inputs = level_l_tables;
     all_inputs.insert(all_inputs.end(), level_l_plus_1_tables.begin(), level_l_plus_1_tables.end());
 
-    std::vector<size_t> current_indices(all_inputs.size(), 0);
+    // load all input data first before merge
+    std::vector<std::vector<DataPair>> input_data_vecs(all_inputs.size());
+    std::vector<size_t> input_levels(all_inputs.size());
+    for(size_t i = 0; i < all_inputs.size(); ++i) {
+        if (!all_inputs[i]->data_loaded_) {
+            if (!all_inputs[i]->loadFromDisk()) {
+                 std::cerr << "Error loading input table " << all_inputs[i]->file_path_ << " for merge." << std::endl;
+                 throw std::runtime_error("Failed to load input SSTable for merge");
+            }
+        }
+        input_data_vecs[i] = all_inputs[i]->table_data_; 
+        input_levels[i] = all_inputs[i]->level_num_;
+        // do I unload the data? 
+    }
 
-    // Initialize the heap with the first element from each non-empty input table
-    for (size_t i = 0; i < all_inputs.size(); ++i) {
-        if (!all_inputs[i]->table_data_.empty()) {
-            min_heap.push({all_inputs[i]->table_data_[0], i, (size_t) all_inputs[i]->level_num_});
+    // make heap with first element from each input vector
+    std::vector<size_t> current_indices(all_inputs.size(), 0);
+    for (size_t i = 0; i < input_data_vecs.size(); ++i) {
+        if (!input_data_vecs[i].empty()) {
+            min_heap.push({input_data_vecs[i][0], i, input_levels[i]});
         }
     }
 
     long last_key = std::numeric_limits<long>::min();
     bool first_entry = true;
 
+    // K-way merge using the heap
     while (!min_heap.empty()) {
         MergeEntry top = min_heap.top();
         min_heap.pop();
 
-        // if key is same as last processed, it's older, skip
         if (!first_entry && top.data.key_ == last_key) {
             current_indices[top.source_table_index]++;
             size_t next_idx = current_indices[top.source_table_index];
-            // push next ele from the same source table
-            if (next_idx < all_inputs[top.source_table_index]->table_data_.size()) {
-                min_heap.push({all_inputs[top.source_table_index]->table_data_[next_idx],
-                               top.source_table_index,
-                               (size_t) all_inputs[top.source_table_index]->level_num_});
-            }
-            // skip older key entry
+             if (next_idx < input_data_vecs[top.source_table_index].size()) {
+                 min_heap.push({input_data_vecs[top.source_table_index][next_idx],
+                                top.source_table_index,
+                                input_levels[top.source_table_index]});
+             }
             continue;
         }
 
         last_key = top.data.key_;
         first_entry = false;
 
-        // tomestones
+        //tombstoness
         bool is_last_level = (output_level_num == (levels_.size() - 1));
         if (!top.data.deleted_ || !is_last_level) {
-             current_output_data.push_back(top.data);
-        } else {
-             std::cout << "[Merge] dropping tombstone for key " << top.data.key_ << " cuz last level" << std::endl;
-        }
+            current_output_data.push_back(top.data);
+        } // else drop the entry if it's a tombstone and we're at the last level
 
-        //check if current output table is full after adding element
+        //check if the current output buffer is full
         if (current_output_data.size() >= TARGET_SSTABLE_SIZE) {
-            output_sstables.push_back(std::make_shared<SSTable>(current_output_data, output_level_num));
-            current_output_data.clear();
+            uint64_t new_file_id = next_file_id_++;
+            std::string new_file_path = getFilePath(output_level_num, new_file_id);
+            auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path);
+            output_sstables.push_back(new_sstable);
+            std::cout << "[Merge] Created output SSTable: " << new_file_path << std::endl;
+            current_output_data.clear(); // Reset buffer for the next file
         }
-        // push next ele from the same source table
+        // push heap
         current_indices[top.source_table_index]++;
         size_t next_idx = current_indices[top.source_table_index];
-        if (next_idx < all_inputs[top.source_table_index]->table_data_.size()) {
-            min_heap.push({all_inputs[top.source_table_index]->table_data_[next_idx],
+        if (next_idx < input_data_vecs[top.source_table_index].size()) {
+            min_heap.push({input_data_vecs[top.source_table_index][next_idx],
                            top.source_table_index,
-                           (size_t) all_inputs[top.source_table_index]->level_num_});
+                           input_levels[top.source_table_index]});
         }
     }
-    // remaining data
+
     if (!current_output_data.empty()) {
-        output_sstables.push_back(std::make_shared<SSTable>(current_output_data, output_level_num));
+        uint64_t new_file_id = next_file_id_++;
+        std::string new_file_path = getFilePath(output_level_num, new_file_id);
+        auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path);
+        output_sstables.push_back(new_sstable);
+        std::cout << "[Merge] created final output SSTable: " << new_file_path << std::endl;
     }
 
     return output_sstables;
