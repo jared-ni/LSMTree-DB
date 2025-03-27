@@ -1,9 +1,7 @@
 #include "lsm_tree.hh"
 #include <iostream>
 #include <queue>
-#include <algorithm> 
-
-#include <unistd.h>
+#include <algorithm>
 
 
 // helper function to generate SSTable filename
@@ -44,6 +42,7 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
     this->level_num_ = level_num;
     this->file_path_ = file_path;
     this->data_loaded_ = true;
+    this->fence_ptr_count_ = 0;
 
     // set min and max key
     if (data.empty()) {
@@ -56,6 +55,23 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
         // data is sorted
         min_key_ = data.front().key_;
         max_key_ = data.back().key_;
+
+        // set up fence pointers if needed, and one for remainder
+        fence_ptr_count_ = size_ / FENCE_PTR_BLOCK_SIZE;
+        if (size_ % FENCE_PTR_BLOCK_SIZE != 0) {
+            fence_ptr_count_++;
+        }
+        // TODO: create fence pointers for binary search
+        for (int i = 0; i < fence_ptr_count_; i++) {
+            fence_ptr fp;
+            // calculate the min and max key for this block
+            int start_index = i * FENCE_PTR_BLOCK_SIZE;
+            int end_index = std::min(start_index + FENCE_PTR_BLOCK_SIZE - 1, static_cast<int>(size_ - 1));
+            fp.min_key = data[start_index].key_;
+            fp.max_key = data[end_index].key_;
+            fp.file_offset = start_index;
+            fence_pointers_.push_back(fp);
+        }
     }
 
     // writeToDisk
@@ -217,6 +233,7 @@ bool SSTable::keyInSSTable(long key) {
         }
     }
     // Perform binary search
+    // TODO: use fence pointers
     auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
     return (it != table_data_.end() && it->key_ == key);
 }

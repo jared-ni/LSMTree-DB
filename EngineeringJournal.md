@@ -78,3 +78,16 @@ Bloom Filters:
 3/25: 
 - Changed to tiering
 - flush when we reach capacity, not when we exceed it, is much simpler
+
+3/26:
+- add fence pointers
+    - I think it makes more sense for the SSTables to have fence pointers, since they are individual files
+    - SSTables already have ranges, and adding fence pointers would make them more fine-grained. 
+    - plus, SSTable data are immutable, thus making fence ptrs easier to use/construct. 
+- add bloom filters
+    - it also makes sense to have one bloom filter per SSTable/file, given that a number already fall into the range? 
+    - reason for this: 
+        - only check bloom filter if number falls into range, and SSTables are sorted
+Together: 
+- check each SSTable's range, then its Bloom filter
+    - if hit, use fence pointers to find the block, then do binary search within the block

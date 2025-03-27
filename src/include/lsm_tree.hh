@@ -13,6 +13,8 @@
 #include <iomanip>
 #include <atomic>
 #include <fstream>
+#include <unistd.h>
+#include <sys/types.h>
 
 #define BUFFER_CAPACITY 10
 #define BASE_LEVEL_TABLE_CAPACITY 5
@@ -20,7 +22,9 @@
 #define MAX_LEVELS 7
 #define MAX_ENTRIES_PER_LEVEL 512
 #define MAX_TABLE_SIZE 1000000
+#define FENCE_PTR_BLOCK_SIZE 170 // 4096 / 24 = 170 bytes
 
+// DataPair is 24 bytes
 class DataPair {
     public:
     DataPair(long key, long value, bool deleted = false);
@@ -33,6 +37,13 @@ class DataPair {
     bool operator<(const DataPair& other) const;
     bool operator==(const DataPair& other) const;
 };
+
+struct fence_ptr {
+    long min_key;
+    long max_key;
+    // where the block starts in the file
+    size_t file_offset; 
+}
 
 // snapshots of the states
 struct SSTableSnapshot {
@@ -69,6 +80,11 @@ class SSTable {
     long min_key_;
     long max_key_;
     size_t size_;
+
+    // TODO: array of fence pointers for binary search on each block
+    int fence_ptr_count_; // size_ / FENCE_PTR_BLOCK_SIZE
+    std::vector<fence_ptr> fence_pointers_;
+    // size of each fence pointer block, used for binary search
 
     // persistence:
     // maybe use lazy-loading, only load data when needed
