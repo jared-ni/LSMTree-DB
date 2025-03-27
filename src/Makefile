@@ -52,7 +52,7 @@ client: client.o utils.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # Server executable
-server: server.o parse.o utils.o
+server: server.o parse.o utils.o lsm_tree.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 lsm_tests: test_main.o lsm_tree.o

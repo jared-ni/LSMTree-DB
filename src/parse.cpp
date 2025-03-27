@@ -14,7 +14,7 @@
 #include <ctype.h>
 #include "parse.h"
 #include "utils.h"
-#include "db_types.h"
+#include "db_types.hh"
 #include <vector>
 #include <iostream>
 
@@ -43,17 +43,6 @@ void parse_args(char* query_command, DbOperator* dbo) {
     }
 }
 
-/**
- * parse_command takes as input the send_message from the client and then
- * parses it into the appropriate query. Stores into send_message the
- * status to send back.
- * Returns a db_operator.
- * 
- * Getting Started Hint:
- *      What commands are currently supported for parsing in the starter code distribution?
- *      How would you add a new command type to parse? 
- *      What if such command requires multiple arguments?
- **/
 DbOperator* parse_command(char* query_command, message* send_message, int client_socket) {
     /**
      * commands: put (p), get (g), range (r), delete (d), load (l), print stats (s)
@@ -70,9 +59,6 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
 
     cs165_log(stdout, "FD %i> QUERY: %s\n", client_socket, query_command);
 
-    // by default, set the status to acknowledge receipt of command,
-    //   indication to client to now wait for the response from the server.
-    //   Note, some commands might want to relay a different status back to the client.
     send_message->status = OK_WAIT_FOR_RESPONSE;
 
     // case match the commands
@@ -98,9 +84,6 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
                 delete dbo;
                 return NULL;
             }
-            // for (int i = 0; i < dbo->args.size(); i++) {
-            //     std::cout << dbo->args[i] << std::endl;
-            // }
             break;
         }
         case 'g': {

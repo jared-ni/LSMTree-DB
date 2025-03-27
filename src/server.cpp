@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/socket.h>
@@ -11,102 +12,175 @@
 #include <algorithm>
 #include <iostream>
 #include <set>
+#include <memory>
 
 #include "parse.h"
 #include "message.h"
 #include "utils.h"
-#include "db_types.h"
+#include "db_types.hh"
+#include "lsm_tree.hh"
+
+// --- Configuration ---
+const std::string DB_PATH = "./lsm_db_directory";
+
+// --- Global LSM Tree ---
+std::unique_ptr<LSMTree> lsm_tree_ptr;
 
 #define DEFAULT_QUERY_BUFFER_SIZE 1024
-#define WORKER_THREADS_NUM 5
-
-// holds client sockets and states
-typedef struct {
-    int client_socket;
-} client_job;
+// #define WORKER_THREADS_NUM 5 // Not used
 
 // shut sown worker threads
 bool shutdown_requested = false;
 pthread_mutex_t shutdown_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/** Step 2 in handle_client_request: 
+/** Step 2 in handle_client_request:
  * TODO: handle query types according CS265 domain specific language
  **/
 char* execute_DbOperator(DbOperator* query) {
+    if (!lsm_tree_ptr) {
+         return strdup("[SERVER] Error: Database not initialized.");
+    }
     if(!query) {
-        return strdup("[SERVER] Error: Invalid DB query.");
-    } else if (query->type == PUT) {
-        std::cout << "putting " << std::endl;
-        for (int i = 0; i < 2; i++) {
-            std::cout << query->args[i] << std::endl;
+        return strdup("[SERVER] Error: Invalid DB query object.");
+    }
+
+    size_t num_args = query->args.size(); 
+
+    if (query->type == PUT) {
+        if (num_args != 2) {
+             return strdup("[SERVER] Error: PUT requires 2 arguments (key, value).");
         }
-        return strdup("[SERVER] putting.");
+       
+        long long key = query->args[0];
+        long long value = query->args[1];
+
+        // Ensure compatibility if LSMTree uses 'long' and args are 'long long'
+        DataPair data_to_put(static_cast<long>(key), static_cast<long>(value), false);
+
+        if (lsm_tree_ptr->putData(data_to_put)) {
+            return strdup("[SERVER] PUT successful.");
+        } else {
+            return strdup("[SERVER] Error: PUT operation failed internally.");
+        }
+
     } else if (query->type == GET) {
-        std::cout << "getting " << std::endl;
+        if (num_args != 1) {
+             return strdup("[SERVER] Error: GET requires 1 argument (key).");
+        }
+        long long key_ll = query->args[0]; // Access directly
+        long key = static_cast<long>(key_ll); // Cast for LSMTree::getData
+
+        std::optional<DataPair> result = lsm_tree_ptr->getData(key);
+
+        if (result.has_value()) {
+            char buffer[64];
+            // Use the values from the result DataPair (which are 'long')
+            int len = snprintf(buffer, sizeof(buffer), "%ld:%ld", result.value().key_, result.value().value_);
+            if (len < 0 || len >= sizeof(buffer)) {
+                return strdup("[SERVER] Error: Failed to format GET result.");
+            }
+            return strdup(buffer);
+        } else {
+             char buffer[100];
+             // Use the original key requested for the not found message
+             snprintf(buffer, sizeof(buffer), "[SERVER] Key %lld not found.", key_ll);
+            return strdup(buffer);
+        }
+
     } else if (query->type == RANGE) {
+        // if (num_args != 2) { // Check using size() if vector
+        if (num_args != 2) {    // Check using num_args field
+            return strdup("[SERVER] Error: RANGE requires 2 arguments (start_key, end_key).");
+        }
+        // long long start_key_ll = query->args[0];
+        // long long end_key_ll = query->args[1];
         std::cout << "range " << std::endl;
+        return strdup("[SERVER] RANGE query not fully implemented.");
+
     } else if (query->type == DELETE) {
-        std::cout << "deleting " << std::endl;
+        if (num_args != 1) {
+             return strdup("[SERVER] Error: DELETE requires 1 argument (key).");
+        }
+        long long key_ll = query->args[0];
+        long key = static_cast<long>(key_ll);
+
+        if (lsm_tree_ptr->deleteData(key)) {
+             char buffer[100];
+             snprintf(buffer, sizeof(buffer), "[SERVER] DELETE requested for key %lld.", key_ll);
+            return strdup(buffer);
+        } else {
+            return strdup("[SERVER] Error: DELETE operation failed internally.");
+        }
+
     } else if (query->type == LOAD) {
         std::cout << "loading " << std::endl;
+        return strdup("[SERVER] LOAD query not implemented.");
+
     } else if (query->type == PRINT_STATS) {
         std::cout << "printing stats" << std::endl;
+        return strdup("[SERVER] PRINT_STATS not implemented.");
+
     } else if (query->type == INCORRECT_FORMAT) {
-        return strdup("[SERVER] Error: Invalid query argument format.");
+        return strdup("[SERVER] Error: Invalid query format detected by parser."); // Modified message slightly
     } else {
-        return strdup("[SERVER] Error: Invalid query type.");
+        return strdup("[SERVER] Error: Unknown query type.");
     }
 }
 
+
 void handle_client_request(int client_socket) {
-    // Create two messages, one from which to read and one from which to receive
     message send_message;
     message recv_message;
 
-    // 1. Parse the command
-    // 2. Handle request if appropriate
-    // 3. Send status of the received message (OK, UNKNOWN_QUERY, etc)
-    // 4. Send response to the request.
     int length = recv(client_socket, &recv_message, sizeof(message), 0);
-    if (length <= 0) {
-        if (length < 0) { log_err("Client connection closed!\n"); }
+    if (length <= 0) { return; }
+
+    if (recv_message.length <= 0 || recv_message.length > DEFAULT_QUERY_BUFFER_SIZE * 10) {
+        log_info("[SERVER] Received invalid message length: %d on socket %d\n", recv_message.length, client_socket);
         return;
     }
 
     char recv_buffer[recv_message.length + 1];
-    length = recv(client_socket, recv_buffer, recv_message.length,0);
+    length = recv(client_socket, recv_buffer, recv_message.length, MSG_WAITALL);
+    if (length != recv_message.length) {
+        log_err("[SERVER] Failed to receive full payload on socket %d. Expected %d, Got %d\n", client_socket, recv_message.length, length);
+        return;
+    }
     recv_message.payload = recv_buffer;
     recv_message.payload[recv_message.length] = '\0';
 
-    // 1. Parse command: client query str -> database operator request
-    // TODO: match to the correct command. 
-    // If the command is not supported, set the status to UNKNOWN_COMMAND 
     DbOperator* query = parse_command(recv_message.payload, &send_message, client_socket);
 
-    // 2. Handle request: db operator request executed -> get response in send_message
     char* result = execute_DbOperator(query);
+    // TODO: If query was allocated by parse_command, free it here, e.g., free_DbOperator(query);
 
+
+    if (strncmp(result, "[SERVER] Error", 14) == 0 || strncmp(result, "[CLIENT] Error", 14) == 0) {
+        send_message.status = EXECUTION_ERROR;
+    } else if (strstr(result, "not found.") != NULL) { // Adjusted check slightly
+         send_message.status = OBJECT_NOT_FOUND;
+    } else {
+        send_message.status = OK_WAIT_FOR_RESPONSE;
+    }
     send_message.length = strlen(result);
-    char send_buffer[send_message.length + 1];
-    strcpy(send_buffer, result);
-    send_message.payload = send_buffer;
-    send_message.status = OK_WAIT_FOR_RESPONSE;
-    
-    // 3. send status of the db respnose
+
     if (send(client_socket, &(send_message), sizeof(message), 0) == -1) {
-        log_err("Failed to send message.");
-        exit(1);
+        log_err("[SERVER] Failed to send response header to socket %d: %s\n", client_socket, strerror(errno));
+        free(result);
+        return;
     }
 
-    // 4. Send response to the request
-    if (send(client_socket, result, send_message.length, 0) == -1) {
-        log_err("Failed to send message.");
-        exit(1);
+    if (send_message.length > 0) {
+        if (send(client_socket, result, send_message.length, 0) == -1) {
+            log_err("[SERVER] Failed to send response payload to socket %d: %s\n", client_socket, strerror(errno));
+        }
     }
+
+    free(result);
 }
 
 
-// setup_server(): set up server side listening socket & return its file descriptor
+// setup_server(): unchanged
 int setup_server() {
     int server_socket;
     size_t len;
@@ -120,26 +194,22 @@ int setup_server() {
     }
 
     local.sun_family = AF_UNIX;
-    strncpy(local.sun_path, SOCK_PATH, strlen(SOCK_PATH) + 1);
+    strncpy(local.sun_path, SOCK_PATH, sizeof(local.sun_path) - 1);
+    local.sun_path[sizeof(local.sun_path) - 1] = '\0';
     unlink(local.sun_path);
 
-    /*
-    int on = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char *)&on, sizeof(on)) < 0)
-    {
-        log_err("L%d: Failed to set socket as reusable.\n", __LINE__);
-        return -1;
-    }
-    */
+    len = SUN_LEN(&local);
 
-    len = strlen(local.sun_path) + sizeof(local.sun_family) + 1;
     if (bind(server_socket, (struct sockaddr *)&local, len) == -1) {
-        log_err("L%d: Socket failed to bind.\n", __LINE__);
+        log_err("L%d: Socket failed to bind %s: %s\n", __LINE__, local.sun_path, strerror(errno));
+        close(server_socket);
         return -1;
     }
 
     if (listen(server_socket, 5) == -1) {
-        log_err("L%d: Failed to listen on socket.\n", __LINE__);
+        log_err("L%d: Failed to listen on socket %s: %s\n", __LINE__, local.sun_path, strerror(errno));
+        close(server_socket);
+        unlink(local.sun_path);
         return -1;
     }
 
@@ -147,22 +217,27 @@ int setup_server() {
 }
 
 
-/**
-* TODO: extend to handle multiple clients
-* Think about what is shared between clients and what is not
-* Use multiplexing: Accept client connection sockets without blocking,
-* use select to wait for activity on any fo the sockets when data can be read/send from any of them.
-**/
 int main(void)
 {
+    // 3. Initialize LSM Tree in main
+    log_info("[SERVER INIT] Initializing LSM Tree at path: %s\n", DB_PATH.c_str());
+    try {
+        lsm_tree_ptr = std::make_unique<LSMTree>(
+            DB_PATH
+        );
+        log_info("[SERVER INIT] LSM Tree initialized successfully.\n");
+    } catch (const std::exception& e) {
+        log_err("[SERVER INIT] CRITICAL: Failed to initialize LSM Tree: %s\n", e.what());
+        exit(EXIT_FAILURE);
+    }
+
     int server_socket = setup_server();
     if (server_socket < 0) {
-        exit(1);
+        exit(EXIT_FAILURE);
     }
-    log_info("[SERVER] server socket %d established.\n", server_socket);
+    log_info("[SERVER] Server socket %d established, listening on %s\n", server_socket, SOCK_PATH);
 
-    // map client socket fds to clientContexts
-    // std::unordered_map<int, ClientContext*> clientContexts
+    
     std::set<int> clientSockets;
     // fd_set bitmap manages set of fds when using select in multiplexing
     fd_set read_fds;
@@ -171,66 +246,86 @@ int main(void)
 
     // TODO: implement multiplexing here
     while (true) {
-        // clear the set of fds, so end of this it contains only ready fds + server socket
         FD_ZERO(&read_fds);
         FD_SET(server_socket, &read_fds);
 
+        max_fd = server_socket;
         // add active client sockets to read_fds
-        for (auto const& client_socket : clientSockets) {
-            FD_SET(client_socket, &read_fds);
-            max_fd = std::max(max_fd, client_socket);
+        for (int client_sock : clientSockets) {
+            FD_SET(client_sock, &read_fds);
+            max_fd = std::max(max_fd, client_sock);
         }
+
         // use select to get all socket fds that can be read
-        int cur_activity = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
-        if (cur_activity < 0) {
-            log_err("[SERVER] select() error.\n");
-            exit(1);
+        int activity = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+
+        if (activity < 0 && errno != EINTR) {
+            log_err("[SERVER] select() error: %s\n", strerror(errno));
+            break;
         }
+         if (activity == 0) {
+             continue;
+         }
+
+
         // New client connection if server socket is ready
         if (FD_ISSET(server_socket, &read_fds)) {
             // note to self: unix socket only works for IPC on the same machine
             struct sockaddr_un client_addr;
             socklen_t socket_sz = sizeof(client_addr);
             int client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &socket_sz);
+
             if (client_socket < 0) {
-                log_err("[SERVER] Failed to accept new client connection.\n");
-                exit(1);
-            }
-
-            log_info("[SERVER] Accepted new client connection %d.\n", client_socket);
-
-            clientSockets.insert(client_socket);
-        }
-
-        // all all ready client sockets
-        std::vector<int> ready_client_sockets;
-        for (auto const& client_socket : clientSockets) {
-            if (FD_ISSET(client_socket, &read_fds)) {
-                ready_client_sockets.push_back(client_socket);
+                log_err("[SERVER] Failed to accept new client connection: %s\n", strerror(errno));
+            } else {
+                log_info("[SERVER] Accepted new client connection on socket %d.\n", client_socket);
+                clientSockets.insert(client_socket);
             }
         }
+
+        // all all ready client sockets (Removed redundant inner loop)
+
         // check all ready client sockets
-        for (int client_socket : ready_client_sockets) {
+        std::vector<int> clients_to_remove;
+        for (int client_socket : clientSockets) {
             if (FD_ISSET(client_socket, &read_fds)) {
                 // check for closed
                 char buffer;
-                // recv return 0 when peeking only on a closed socket
-                if (recv(client_socket, &buffer, 1, MSG_PEEK) == 0) {
-                    log_info("Client disconnected at socket %d\n", client_socket);
-                    close(client_socket);
-                    clientSockets.erase(client_socket);
-                    continue;
+                ssize_t peek_len = recv(client_socket, &buffer, 1, MSG_PEEK | MSG_DONTWAIT);
+
+                if (peek_len == 0) {
+                    log_info("[SERVER] Client disconnected (detected by peek): socket %d\n", client_socket);
+                    clients_to_remove.push_back(client_socket);
+                } else if (peek_len < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                         log_info("[SERVER] Warning: Spurious wakeup or no data on ready socket %d?\n", client_socket);
+                    } else {
+                        log_err("[SERVER] Error peeking on socket %d: %s\n", client_socket, strerror(errno));
+                        clients_to_remove.push_back(client_socket);
+                    }
                 } else {
                     handle_client_request(client_socket);
                 }
             }
         }
+
+        for (int client_socket : clients_to_remove) {
+            close(client_socket);
+            clientSockets.erase(client_socket);
+            log_info("[SERVER] Closed and removed client socket %d\n", client_socket);
+        }
+
     }
 
-    for (auto const& client_socket : clientSockets) {
+    log_info("[SERVER] Shutting down...\n");
+    for (int client_socket : clientSockets) {
         close(client_socket);
     }
-    close(server_socket);
+    if (server_socket >= 0) {
+        close(server_socket);
+        unlink(SOCK_PATH);
+    }
+    log_info("[SERVER] Shutdown complete.\n");
 
     return 0;
 }

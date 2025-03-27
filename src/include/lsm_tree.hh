@@ -17,9 +17,9 @@
 #include <sys/types.h>
 
 #define BUFFER_CAPACITY 10
-#define BASE_LEVEL_TABLE_CAPACITY 5
+#define BASE_LEVEL_TABLE_CAPACITY 10
 #define LEVEL_SIZE_RATIO 10 // how much bigger l1 is than l0
-#define MAX_LEVELS 7
+#define MAX_LEVELS 10
 #define MAX_ENTRIES_PER_LEVEL 512
 #define MAX_TABLE_SIZE 1000000
 #define FENCE_PTR_BLOCK_SIZE 170 // 4096 / 24 = 170 bytes
@@ -43,7 +43,7 @@ struct fence_ptr {
     long max_key;
     // where the block starts in the file
     size_t file_offset; 
-}
+};
 
 // snapshots of the states
 struct SSTableSnapshot {
@@ -200,7 +200,7 @@ class LSMTree {
     // API: put, get, range, delete
     bool putData(const DataPair& data);
     std::optional<DataPair> getData(long key);
-    void rangeData(long low, long high) const;
+    void rangeData(long low, long high);
     bool deleteData(long key);
 
     // protects all flush: only one thread can flush at a time

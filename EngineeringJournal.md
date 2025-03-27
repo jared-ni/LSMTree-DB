@@ -95,4 +95,9 @@ Together:
 Last bit of work:
 - integrate client-server with lsm tree
 - range query
-- 
+- design experiments:
+    - size ratio? 
+        1. get a workload generated
+        2. plot the seconds it takes to run the workload
+        3. do it 3-5 time on the same workload, with different size ratio
+    - 
