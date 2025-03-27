@@ -776,6 +776,28 @@ std::optional<DataPair> LSMTree::getData(long key) {
     return std::nullopt;
 }
 
+// TODO: need to implement still
+void LSMTree::rangeData(long low, long high) {
+    for (int i = low; i < high; i++) {
+        std::optional<DataPair> data_pair = getData(i);
+        if (data_pair.has_value()) {
+            std::cout << i << ":" << data_pair.value().value_ << std::endl;
+        } else {
+            std::cout << std::endl;
+        }
+    }
+}
+
+// delete is just putting in the tombstone in the buffer for now
+bool LSMTree::deleteData(long key) {
+    // mark data in buffer as tombstone, if found
+    DataPair tombstone_data(key, 0, true);
+    bool success = buffer_->putData(tombstone_data);
+    return success;
+}
+
+
+
 // persistence
 void LSMTree::deleteSSTableFile(const std::shared_ptr<SSTable>& sstable) {
     if (!sstable || sstable->file_path_.empty()) {

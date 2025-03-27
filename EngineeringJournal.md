@@ -91,3 +91,8 @@ Bloom Filters:
 Together: 
 - check each SSTable's range, then its Bloom filter
     - if hit, use fence pointers to find the block, then do binary search within the block
+
+Last bit of work:
+- integrate client-server with lsm tree
+- range query
+- 

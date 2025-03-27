@@ -200,6 +200,8 @@ class LSMTree {
     // API: put, get, range, delete
     bool putData(const DataPair& data);
     std::optional<DataPair> getData(long key);
+    void rangeData(long low, long high) const;
+    bool deleteData(long key);
 
     // protects all flush: only one thread can flush at a time
     std::mutex flush_mutex_;
