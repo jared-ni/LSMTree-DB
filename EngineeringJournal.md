@@ -101,3 +101,16 @@ Last bit of work:
         2. plot the seconds it takes to run the workload
         3. do it 3-5 time on the same workload, with different size ratio
     - 
+
+3/28: 
+- comparison
+
+3/31: 
+- re-record the data, free up the max entry size this time. 
+- size ratio 2 vs. 10 comparison. 
+
+4/2:
+- Implemented SSTable-level bloom filter, and it works
+- For 1GB put 10MB get, it adds 50 sec to put, but keeps get at 3 seconds. 
+- Constant I/O takes a lot of time. I will consider moving the bloom filter to Level, 
+and have one bloom filter per level instead. 

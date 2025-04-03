@@ -1,14 +1,13 @@
 # CS165 Makefile (C++ Version)
 
 # Target executables
-all: client server lsm_tests
+all: client server lsm_tests benchmark bloom_tests
 
 # C++ compiler settings
 CXX = g++
-CXXFLAGS = -std=c++17 -g -ggdb3 -Wall -Wextra -pedantic -pthread -O$(O) -I$(INCLUDES)
 
-# Default optimization level
-O ?= 0
+# high performance flags
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pedantic -pthread -I$(INCLUDES)
 
 # Linker flags and libraries
 LDFLAGS =
@@ -52,16 +51,23 @@ client: client.o utils.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # Server executable
-server: server.o parse.o utils.o lsm_tree.o
+server: server.o parse.o utils.o lsm_tree.o bloom_filter.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-lsm_tests: test_main.o lsm_tree.o
+benchmark: benchmark.o lsm_tree.o bloom_filter.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+lsm_tests: test_main.o lsm_tree.o bloom_filter.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+bloom_tests: bloom_filter.o test_bloom_filter.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
 
 # --- Clean Targets ---
 
 clean:
-	rm -f client server *.o *~ *.bak core *.core $(DEPSDIR)/* $(SOCK_PATH)
+	rm -rf client server benchmark *.o *~ *.bak core *.core $(DEPSDIR)/* $(SOCK_PATH)
 
 distclean: clean
 	rm -rf $(DEPSDIR)

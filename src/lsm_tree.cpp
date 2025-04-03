@@ -37,12 +37,17 @@ bool DataPair::operator==(const DataPair& other) const {
  * SSTable methods
  */
 SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
-                 const std::string& file_path) {
+                 const std::string& file_path, const std::string& bf_file_path) :
+    bloom_filter_(data.size())
+{
     this->table_data_ = data;
     this->level_num_ = level_num;
     this->file_path_ = file_path;
+    this->bf_file_path_ = bf_file_path;
     this->data_loaded_ = true;
     this->fence_ptr_count_ = 0;
+    // add bloom filter
+    // this->bloom_filter_ = BloomFilter(data.size());
 
     // set min and max key
     if (data.empty()) {
@@ -55,6 +60,13 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
         // data is sorted
         min_key_ = data.front().key_;
         max_key_ = data.back().key_;
+        
+        // TODO: bloom filter
+        bloom_filter_ = BloomFilter(size_);
+        for (const auto& dataPair : data) {
+            bloom_filter_.add(dataPair.key_);
+        }
+
 
         // set up fence pointers if needed, and one for remainder
         fence_ptr_count_ = size_ / FENCE_PTR_BLOCK_SIZE;
@@ -80,29 +92,120 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
     }
 }
 
-SSTable::SSTable(int level_num, const std::string& file_path) {
+// eager loading bloom filter, but lazy load table data
+SSTable::SSTable(int level_num, const std::string& file_path, 
+                 const std::string& bf_file_path)
+    : bloom_filter_(0)
+{
     this->level_num_ = level_num;
     this->file_path_ = file_path;
+    this->bf_file_path_ = bf_file_path;
     this->size_ = 0;
     this->data_loaded_ = false;
-    std::cout << "[SSTable] placeholder for file: " << file_path_ << std::endl;
+    this->min_key_ = std::numeric_limits<long>::max();
+    this->max_key_ = std::numeric_limits<long>::min();
+
+    this->fence_ptr_count_ = 0;
+    // TODO: Bloom filter: setting and loading eagerly
+
+    std::ifstream bf_infile(bf_file_path_, std::ios::binary);
+
+    if (bf_infile) {
+        size_t num_bits = 0;
+        size_t num_hashes = 0;
+
+        bf_infile.read(reinterpret_cast<char*>(&num_bits), sizeof(num_bits));
+        bf_infile.read(reinterpret_cast<char*>(&num_hashes), sizeof(num_hashes));
+
+        // check if read was successful
+        if (bf_infile.good()) {
+            if (num_bits > 0) {
+                size_t num_bytes_expected = (num_bits + CHAR_BIT - 1) / CHAR_BIT;
+                std::vector<unsigned char> loaded_bits(num_bytes_expected);
+                // read into first element in the array
+                bf_infile.read(reinterpret_cast<char*>(loaded_bits.data()), num_bytes_expected);
+
+                // check if read was successful
+                if (!bf_infile.fail()) {
+                    // read all remaining bytes
+                    if (bf_infile.gcount() == static_cast<std::streamsize>(num_bytes_expected)) {
+                        this->bloom_filter_ = BloomFilter(num_bits, num_hashes, loaded_bits);
+                    } else {
+                        std::cerr << "[SSTable Placeholder WARN] Failed to read sufficient Bloom filter bits for "
+                                  << this->file_path_ << ". Read " << bf_infile.gcount() << " of " << num_bytes_expected 
+                                  << " bytes." << std::endl;
+                    }
+                } else {
+                    // Stream is in a failed state
+                    std::cerr << "[SSTable] Stream in failed state after attempting to read Bloom filter bits." << std::endl;
+                }
+            // if num_bits is 0
+            } else {
+                this->bloom_filter_ = BloomFilter(0, 0, {});
+            }
+        // if read was not successful
+        } else {
+            std::cerr << "[SSTable Placeholder WARN] Failed to read Bloom filter header for " << this->file_path_ << std::endl;
+            // bloom_filter_ remains in its default empty state
+        }
+        bf_infile.close();
+    } else {
+        std::cout << "[SSTable Placeholder INFO] Bloom filter file " << bf_file_path
+                  << " not found. Will be reconstructed if/when main data is loaded." << std::endl;
+    }
 }
 
 // persistence on SSTable
 bool SSTable::writeToDisk() const {
     // parent directory must exist
     std::ofstream outfile(file_path_);
+
     if (!outfile) {
         std::cerr << "[SSTable] error opening write file " << file_path_ << std::endl;
         return false;
     }
 
+    // TODO: refactor to use binary write
     // key:value:tombstone per line
     for (const auto& pair : table_data_) {
         outfile << pair.key_ << ":" << pair.value_ << ":" << (pair.deleted_ ? 1 : 0) << "\n";
     }
     outfile.close();
-    return !outfile.fail();
+
+    bool sst_write_success = !outfile.fail();
+    if (!sst_write_success) {
+        std::cerr << "[SSTable] error writing to file " << file_path_ << std::endl;
+        return false;
+    }
+
+    // TODO: write bloom filter to a .bf file in binary
+    std::ofstream bf_outfile(bf_file_path_, std::ios::binary);
+    if (!bf_outfile) {
+        std::cerr << "[SSTable] error opening bloom filter file " << bf_file_path_ << std::endl;
+        return false;
+    }
+    // write the number of bits and hashes
+    size_t num_bits = bloom_filter_.num_bits_;
+    size_t num_hashes = bloom_filter_.num_hashes_;
+
+    bf_outfile.write(reinterpret_cast<const char*>(&num_bits), sizeof(num_bits));
+    bf_outfile.write(reinterpret_cast<const char*>(&num_hashes), sizeof(num_hashes));
+
+    if (num_bits > 0) {
+        const std::vector<unsigned char>& bits = bloom_filter_.bits_;
+        if (!bits.empty()) {
+            bf_outfile.write(reinterpret_cast<const char*>(bits.data()), bits.size());
+        }
+    }
+    bf_outfile.close();
+    bool bf_write_success = !bf_outfile.fail();
+    if (!bf_write_success) {
+        std::cerr << "[SSTable] error writing bloom filter to file " << bf_file_path_ << std::endl;
+        return false;
+    }
+
+    return !outfile.fail() && !bf_outfile.fail();
+    // return true;
 }
 
 //persistence
@@ -110,10 +213,11 @@ bool SSTable::loadFromDisk() {
     if (data_loaded_) {
         return true;
     }
-    std::cout << "[SSTable] lazy loading from: " << file_path_ << std::endl;
+    // std::cout << "[SSTable] lazy loading from: " << file_path_ << std::endl;
     std::ifstream infile(file_path_);
     if (!infile) {
-        std::cerr << "[SSTable ERROR] Could not open file for reading: " << file_path_ << " (Error: " << strerror(errno) << ")" << std::endl; // Include system error
+        std::cerr << "[SSTable ERROR] Could not open file for reading: " 
+                  << file_path_ << " (Error: " << strerror(errno) << ")" << std::endl; // Include system error
         return false;
     }
     // clean slate
@@ -161,7 +265,7 @@ bool SSTable::loadFromDisk() {
     infile.close();
     // metadata update after loading
     if (table_data_.empty()) {
-        std::cout << "[SSTable] warning: Loaded empty table data from " << file_path_ << std::endl;
+        // std::cout << "[SSTable] warning: Loaded empty table data from " << file_path_ << std::endl;
         size_ = 0;
         min_key_ = std::numeric_limits<long>::max();
         max_key_ = std::numeric_limits<long>::min();
@@ -169,9 +273,25 @@ bool SSTable::loadFromDisk() {
         size_ = table_data_.size();
         min_key_ = table_data_.front().key_;
         max_key_ = table_data_.back().key_;
-        std::cout << "[SSTable] successfully loaded " << size_ << " entries from " << file_path_ << std::endl;
+        // std::cout << "[SSTable] successfully loaded " << size_ << " entries from " << file_path_ << std::endl;
     }
     data_loaded_ = true;
+
+
+    // TODO: attempt loading bloom filter
+    // placeholder constructor might have already loaded it
+    // if num_bits_ is 0 but we've loaded the data, 
+    if (this->bloom_filter_.num_bits_ == 0 && !this->table_data_.empty()) {
+        std::cout << "[SSTable INFO] Reconstructing Bloom filter for " << this->file_path_
+                  << " because persisted .bf was missing and main data is now loaded." << std::endl;
+
+        BloomFilter new_bf(this->table_data_.size());
+        for (const auto& dataPair : this->table_data_) {
+            new_bf.add(dataPair.key_);
+        }
+        this->bloom_filter_ = new_bf;
+    }
+
     return true;
 }
 
@@ -244,10 +364,11 @@ bool SSTable::keyInSSTable(long key) {
  */
 
 // TODO: capacity trigger based on bytes/entries, not SSTables count. 
-Level::Level(int level_num, size_t table_capacity, size_t entries_capacity) {
+Level::Level(int level_num, size_t table_capacity) {
+            //  size_t entries_capacity) {
     this->level_num_ = level_num;
     this->table_capacity_ = table_capacity;
-    this->entries_capacity_ = entries_capacity;
+    // this->entries_capacity_ = entries_capacity;
     this->cur_table_count_ = 0;
     this->cur_total_entries_ = 0;
 }
@@ -308,7 +429,8 @@ void Level::removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& table
 // two conditions to trigger compaction!!
 bool Level::needsCompaction() const {
     // std::shared_lock<std::shared_mutex> lock(mutex_);
-    return (cur_table_count_ >= table_capacity_) || (cur_total_entries_ >= entries_capacity_);
+    return (cur_table_count_ >= table_capacity_);
+    // || (cur_total_entries_ >= entries_capacity_);
 }
 
 void Level::printLevel() const{
@@ -385,6 +507,7 @@ bool Buffer::putData(const DataPair& data) {
 }
 
 std::optional<DataPair> Buffer::getData(long key) const {
+
     // search through buffer to see if data exists, for now
     auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
     if (it != buffer_data_.end() && it->key_ == key) {
@@ -419,7 +542,11 @@ LSMTree::LSMTree(const std::string& db_path,
     levels_.reserve(total_levels);
     size_t cur_level_capacity = base_level_capacity;
     for (size_t i = 0; i < total_levels; i++) {
-        levels_.push_back(std::make_unique<Level>(i, cur_level_capacity, MAX_ENTRIES_PER_LEVEL));
+        // levels_.push_back(std::make_unique<Level>(i, cur_level_capacity, MAX_ENTRIES_PER_LEVEL));
+        levels_.push_back(std::make_unique<Level>(i, cur_level_capacity));
+        std::cout << "[LSMTree] Created Level " << i 
+                  << " with table capacity: " << cur_level_capacity 
+                  << " (buffer capacity: " << buffer_capacity_ << ")" << std::endl;
         cur_level_capacity *= level_size_ratio;
     }
 
@@ -432,7 +559,7 @@ void LSMTree::setupDB() {
     // makes sure path looks good
     if (!std::filesystem::exists(db_path_) || 
         !std::filesystem::is_directory(db_path_)) {
-        std::cout << "[LSMTree] no database directory, creating at: " << db_path_ << std::endl;
+        // std::cout << "[LSMTree] no database directory, creating at: " << db_path_ << std::endl;
         if (!std::filesystem::create_directories(db_path_, ec)) {
             // Fatal error if DB directory cannot be created
             std::cerr << "Failed creating db dir " << db_path_ << ": " << ec.message() << std::endl;
@@ -445,20 +572,25 @@ void LSMTree::setupDB() {
         // returns the path for each level, given level num
         std::string level_path = getLevelPath(i);
         if (!std::filesystem::exists(level_path)) {
-            std::cout << "[LSMTree] creating level directory: " << level_path << std::endl;
+            // std::cout << "[LSMTree] creating level directory: " << level_path << std::endl;
             if (!std::filesystem::create_directory(level_path, ec)) {
                 std::cerr << "failed to create level directory " << level_path << ": " << ec.message() << std::endl;
                 throw std::runtime_error("failed to create level directory");
+            }
+            if (!std::filesystem::create_directory(level_path + "/bloom_filters", ec)) {
+                std::cerr << "failed to create bloom filter directory " << level_path + "/bloom_filters" 
+                          << ": " << ec.message() << std::endl;
+                throw std::runtime_error("failed to create bloom filter directory");
             }
         }
     }
 
     // check history to load existing state if there's any
     if (std::filesystem::exists(history_path_)) {
-        std::cout << "[LSMTree] loading history from: " << history_path_ << std::endl;
+        // std::cout << "[LSMTree] loading history from: " << history_path_ << std::endl;
         loadHistory();
     } else {
-        std::cout << "[LSMTree] no history found at: " << history_path_ << std::endl;
+        // std::cout << "[LSMTree] no history found at: " << history_path_ << std::endl;
         // If no history, initialize an empty history file
         // reset the next_file_id_ to 1
         next_file_id_ = 1;
@@ -472,6 +604,10 @@ std::string LSMTree::getLevelPath(int level_num) const {
 
 std::string LSMTree::getFilePath(int level_num, int file_id) const {
     return getLevelPath(level_num) + "/" + generateSSTableFilename(file_id);
+}
+
+std::string LSMTree::getBloomFilterPath(int level_num, int file_id) const {
+    return getLevelPath(level_num) + "/bloom_filters/" + generateSSTableFilename(file_id) + ".bf";
 }
 
 
@@ -662,7 +798,7 @@ std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
         // basic level info
         level_snap.level_num = level_ptr->level_num_;
         level_snap.table_capacity = level_ptr->table_capacity_;
-        level_snap.entries_capacity = level_ptr->entries_capacity_;
+        // level_snap.entries_capacity = level_ptr->entries_capacity_;
         level_snap.current_table_count = level_ptr->cur_table_count_;
         level_snap.current_total_entries = level_ptr->cur_total_entries_;
 
@@ -695,22 +831,25 @@ void LSMTree::flushBuffer() {
     if (buffer_->buffer_data_.empty()) {
         return;
     }
-    std::cout << "[LSMTree] Flushing buffer..." << std::endl;
+    // std::cout << "[LSMTree] Flushing buffer..." << std::endl;
 
     // data from buffer
+    // this performs a deep copy of the buffer data to ensure we have a snapshot of the data to flush
     std::vector<DataPair> data_to_flush = buffer_->buffer_data_;
+    // TODO: 
     buffer_->buffer_data_.clear();
     buffer_->cur_size_ = 0;
 
     // generate new level 0 SSTable id and file path
     uint64_t new_file_id = next_file_id_++;
     std::string new_file_path = getFilePath(0, new_file_id);
+    std::string bf_file_path = getBloomFilterPath(0, new_file_id);
 
     std::shared_ptr<SSTable> sstable_ptr = nullptr;
     try {
         // create the SSTable object and write to disk
-        sstable_ptr = std::make_shared<SSTable>(data_to_flush, 0, new_file_path);
-        std::cout << "[LSMTree] flushed buffer to new SSTable file: " << new_file_path << std::endl;
+        sstable_ptr = std::make_shared<SSTable>(data_to_flush, 0, new_file_path, bf_file_path);
+        // std::cout << "[LSMTree] flushed buffer to new SSTable file: " << new_file_path << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "can't create/write SSTable during flush: " << e.what() << std::endl;
         // If file creation failed revert file id
@@ -725,7 +864,7 @@ void LSMTree::flushBuffer() {
     // trigger compaction check before adding to Level 0 in memory
     checkCompaction(0);
 
-    std::cout << "[LSMTree] Flushed SSTable " << new_file_id << " to Level 0" << std::endl;
+    // std::cout << "[LSMTree] Flushed SSTable " << new_file_id << " to Level 0" << std::endl;
     // levels_[0]->printLevel();
 }
 
@@ -756,12 +895,18 @@ std::optional<DataPair> LSMTree::getData(long key) {
         const auto& cur_level = levels_[level_i];
         // skip level if bloom filter says key not in level
         const auto& cur_sstables = cur_level->getSSTables();
+
         for (const auto& cur_sstable : cur_sstables) {
+            // TODO: check bloom filter
+            if (!cur_sstable->bloom_filter_.might_contain(key)) {
+                continue;
+            }
+
             // check range: if not in range, continue
             if (!cur_sstable->keyInRange(key)) {
                 continue;
             }
-            // check if key in sstable
+            // TODO: now actually search the sstable, using fence pointers
             std::optional<DataPair> data_search_res = cur_sstable->getDataPair(key);
             if (data_search_res.has_value()) {
                 return data_search_res;
@@ -781,9 +926,9 @@ void LSMTree::rangeData(long low, long high) {
     for (int i = low; i < high; i++) {
         std::optional<DataPair> data_pair = getData(i);
         if (data_pair.has_value()) {
-            std::cout << i << ":" << data_pair.value().value_ << std::endl;
+            // std::cout << i << ":" << data_pair.value().value_ << std::endl;
         } else {
-            std::cout << std::endl;
+            // std::cout << std::endl;
         }
     }
 }
@@ -799,6 +944,8 @@ bool LSMTree::deleteData(long key) {
 
 
 // persistence
+// delete the SSTable file and its bloom filter
+// can we delete in the background?
 void LSMTree::deleteSSTableFile(const std::shared_ptr<SSTable>& sstable) {
     if (!sstable || sstable->file_path_.empty()) {
         return;
@@ -806,9 +953,15 @@ void LSMTree::deleteSSTableFile(const std::shared_ptr<SSTable>& sstable) {
 
     std::error_code ec;
     if (std::filesystem::remove(sstable->file_path_, ec)) {
-        std::cout << "[LSMTree] delete SSTable file: " << sstable->file_path_ << std::endl;
+        // std::cout << "[LSMTree] delete SSTable file: " << sstable->file_path_ << std::endl;
     } else {
         std::cerr << "Warning: fail to delete SSTable file " << sstable->file_path_ << ": " << ec.message() << std::endl;
+    }
+    // delete the bloom filter file
+    if (std::filesystem::remove(sstable->bf_file_path_, ec)) {
+        // std::cout << "[LSMTree] delete Bloom filter file: " << sstable->bf_file_path_ << std::endl;
+    } else {
+        std::cerr << "Warning: fail to delete Bloom filter file " << sstable->bf_file_path_ << ": " << ec.message() << std::endl;
     }
 }
 
@@ -823,7 +976,7 @@ bool LSMTree::checkCompaction(size_t level_index) {
 
     bool needs_compaction = cur_level->needsCompaction();
     if (needs_compaction) {
-        std::cout << "[LSMTree] Level " << level_index << " needs compaction..." << std::endl;
+        // std::cout << "[LSMTree] Level " << level_index << " needs compaction..." << std::endl;
         compactLevel(level_index);
     }
     return true;
@@ -840,20 +993,20 @@ void LSMTree::compactLevel(size_t level_index) {
         // std::shared_lock<std::shared_mutex> lock(levels_[level_index]->mutex_);
         // Use the existing needsCompaction which might use >= threshold
         if (!levels_[level_index]->needsCompaction()) {
-            std::cout << "[LSMTree] Race condition or no longer needs compaction for Level " << level_index << ". Skipping." << std::endl;
+            // std::cout << "[LSMTree] Race condition or no longer needs compaction for Level " << level_index << ". Skipping." << std::endl;
             return;
         }
     }
 
     size_t next_level_index = level_index + 1;
     if (next_level_index >= levels_.size()) {
-        std::cout << "[LSMTree] Level " << level_index << " is the last level, no compaction" << std::endl;
+        // std::cout << "[LSMTree] Level " << level_index << " is the last level, no compaction" << std::endl;
         // Tiered compaction usually stops at the last level or has a different strategy there.
         // For now, we just stop.
         return;
     }
 
-    std::cout << "[LSMTree Tiered] starting compaction for level " << level_index << " into level " << next_level_index << std::endl;
+    // std::cout << "[LSMTree Tiered] starting compaction for level " << level_index << " into level " << next_level_index << std::endl;
 
     // compaction participants
     std::vector<std::shared_ptr<SSTable>> input_tables_level;
@@ -878,12 +1031,12 @@ void LSMTree::compactLevel(size_t level_index) {
 
     // Abort if somehow no tables were selected (shouldn't happen after the check above)
     if (input_tables_level.empty()) {
-        std::cout << "[LSMTree Tiered] No input tables selected from L" << level_index << ". Aborting." << std::endl;
+        // std::cout << "[LSMTree Tiered] No input tables selected from L" << level_index << ". Aborting." << std::endl;
         return;
     }
 
-    std::cout << "[LSMTree Tiered] Merging " << input_tables_level.size() << " tables from Tier " << level_index
-              << " into Tier " << next_level_index << std::endl; // Modified log message slightly
+    // std::cout << "[LSMTree Tiered] Merging " << input_tables_level.size() << " tables from Tier " << level_index
+    //           << " into Tier " << next_level_index << std::endl; // Modified log message slightly
 
     // Perform merge logic - mergeSSTables now takes an empty input_tables_level_next
     std::vector<std::shared_ptr<SSTable>> output_tables;
@@ -915,10 +1068,10 @@ void LSMTree::compactLevel(size_t level_index) {
         deleteSSTableFile(table);
     }
 
-    std::cout << "[LSMTree Tiered] finished compaction, added " << output_tables.size()
-              << " new tables to Tier " << next_level_index << "." << std::endl;
-    levels_[level_index]->printLevel();
-    levels_[next_level_index]->printLevel();
+    // std::cout << "[LSMTree Tiered] finished compaction, added " << output_tables.size()
+    //           << " new tables to Tier " << next_level_index << "." << std::endl;
+    // levels_[level_index]->printLevel();
+    // levels_[next_level_index]->printLevel();
 
     // after compacted this level, compact the next if needed
     checkCompaction(next_level_index);
@@ -996,9 +1149,10 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
         if (current_output_data.size() >= TARGET_SSTABLE_SIZE) {
             uint64_t new_file_id = next_file_id_++;
             std::string new_file_path = getFilePath(output_level_num, new_file_id);
-            auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path);
+            std::string new_bloom_filter_path = getBloomFilterPath(output_level_num, new_file_id);
+            auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path, new_bloom_filter_path);
             output_sstables.push_back(new_sstable);
-            std::cout << "[Merge] Created output SSTable: " << new_file_path << std::endl;
+            // std::cout << "[Merge] Created output SSTable: " << new_file_path << std::endl;
             current_output_data.clear(); // Reset buffer for the next file
         }
         // push heap
@@ -1014,9 +1168,10 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     if (!current_output_data.empty()) {
         uint64_t new_file_id = next_file_id_++;
         std::string new_file_path = getFilePath(output_level_num, new_file_id);
-        auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path);
+        std::string new_bloom_filter_path = getBloomFilterPath(output_level_num, new_file_id);
+        auto new_sstable = std::make_shared<SSTable>(current_output_data, output_level_num, new_file_path, new_bloom_filter_path);
         output_sstables.push_back(new_sstable);
-        std::cout << "[Merge] created final output SSTable: " << new_file_path << std::endl;
+        // std::cout << "[Merge] created final output SSTable: " << new_file_path << std::endl;
     }
 
     return output_sstables;

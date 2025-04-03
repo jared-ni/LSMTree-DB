@@ -15,12 +15,14 @@
 #include <fstream>
 #include <unistd.h>
 #include <sys/types.h>
+#include "bloom_filter.hh"
 
-#define BUFFER_CAPACITY 10
-#define BASE_LEVEL_TABLE_CAPACITY 10
-#define LEVEL_SIZE_RATIO 10 // how much bigger l1 is than l0
+
+#define BUFFER_CAPACITY 100
+#define BASE_LEVEL_TABLE_CAPACITY 2
+#define LEVEL_SIZE_RATIO 2 // how much bigger l1 is than l0
 #define MAX_LEVELS 10
-#define MAX_ENTRIES_PER_LEVEL 512
+// #define MAX_ENTRIES_PER_LEVEL 5120000000000
 #define MAX_TABLE_SIZE 1000000
 #define FENCE_PTR_BLOCK_SIZE 170 // 4096 / 24 = 170 bytes
 
@@ -58,7 +60,7 @@ struct SSTableSnapshot {
 struct LevelSnapshot {
     int level_num;
     size_t table_capacity;
-    size_t entries_capacity;
+    // size_t entries_capacity;
     size_t current_table_count;
     size_t current_total_entries;
     std::vector<SSTableSnapshot> sstables;
@@ -69,17 +71,22 @@ struct LevelSnapshot {
 class SSTable {
     public:
     SSTable(const std::vector<DataPair>& data, int level_num, 
-            const std::string& file_name);
+            const std::string& file_path, const std::string& bf_file_path);
     // prepare for log loading
-    SSTable(int level_num, const std::string& file_path);
+    SSTable(int level_num, const std::string& file_path, 
+            const std::string& bf_file_path);
 
     std::string file_path_;
+    std::string bf_file_path_;
 
     int level_num_;
 
     long min_key_;
     long max_key_;
     size_t size_;
+
+    // TODO: bloom filter
+    BloomFilter bloom_filter_;
 
     // TODO: array of fence pointers for binary search on each block
     int fence_ptr_count_; // size_ / FENCE_PTR_BLOCK_SIZE
@@ -108,13 +115,13 @@ class Level {
     public:
     // level_num is id, capacity is max size of this level, cur_size is current size
     Level(int level_num, 
-          size_t table_capacity,
-          size_t entries_capacity);
+          size_t table_capacity);
+        //   size_t entries_capacity);
 
     int level_num_;
 
     size_t table_capacity_;
-    size_t entries_capacity_;
+    // size_t entries_capacity_;
 
     size_t cur_table_count_;
     size_t cur_total_entries_;
@@ -216,6 +223,7 @@ class LSMTree {
     void updateHistoryAdd(std::shared_ptr<SSTable> new_sstable);
     std::string getLevelPath(int level_num) const;
     std::string getFilePath(int level_num, int file_id) const;
+    std::string getBloomFilterPath(int level_num, int file_id) const;
     // delete physical file of an SSTable
     void deleteSSTableFile(const std::shared_ptr<SSTable>& sstable);
 };

@@ -147,10 +147,10 @@ void test_level() {
     create_temp_dir(TEMP_SSTABLE_DIR);
 
     // 1. test create level 1 with capacity 2
-    Level level(1, table_capacity, entries_capacity);
+    Level level(1, table_capacity);
     assert(level.level_num_ == 1);
     assert(level.table_capacity_ == table_capacity);
-    assert(level.entries_capacity_ == entries_capacity);
+    // assert(level.entries_capacity_ == entries_capacity);
     assert(level.cur_table_count_ == 0);
     assert(level.cur_total_entries_ == 0);
     assert(level.getSSTables().empty());
