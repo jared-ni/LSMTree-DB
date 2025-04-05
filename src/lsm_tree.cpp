@@ -400,7 +400,7 @@ std::optional<DataPair> SSTable::getDataPair(long key) {
                                 [](const DataPair& dataPair, long key) {
                                     return dataPair.key_ < key;
                                 });
-    // auto it = std::lower_bound(block_begin_it, block_end_it, key);
+    auto it = std::lower_bound(block_begin_it, block_end_it, key);
     if (it != block_end_it && it->key_ == key) {
         // always return, even if tombstone/deleted, so we can check in the return
         // and avoid keyInSSTable() check
