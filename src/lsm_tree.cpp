@@ -45,7 +45,6 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
     this->file_path_ = file_path;
     this->bf_file_path_ = bf_file_path;
     this->data_loaded_ = true;
-    this->fence_ptr_count_ = 0;
     // add bloom filter
     // this->bloom_filter_ = BloomFilter(data.size());
 
@@ -67,22 +66,20 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
             bloom_filter_.add(dataPair.key_);
         }
 
-
-        // set up fence pointers if needed, and one for remainder
-        fence_ptr_count_ = size_ / FENCE_PTR_BLOCK_SIZE;
-        if (size_ % FENCE_PTR_BLOCK_SIZE != 0) {
-            fence_ptr_count_++;
-        }
         // TODO: create fence pointers for binary search
-        for (int i = 0; i < fence_ptr_count_; i++) {
-            fence_ptr fp;
-            // calculate the min and max key for this block
-            int start_index = i * FENCE_PTR_BLOCK_SIZE;
-            int end_index = std::min(start_index + FENCE_PTR_BLOCK_SIZE - 1, static_cast<int>(size_ - 1));
-            fp.min_key = data[start_index].key_;
-            fp.max_key = data[end_index].key_;
-            fp.file_offset = start_index;
-            fence_pointers_.push_back(fp);
+        this->fence_pointers_.clear();
+        if (this->size_ > 0) {
+            // add fence pointers
+            for (size_t i = 0; i < this->size_; i += fence_pointer_block_size_) {
+                fence_ptr fp;
+                fp.min_key = this->table_data_[i].key_;
+                fp.data_offset = i;
+
+                // block size calculation, since it might be the last one
+                size_t remain_items = this->size_ - i;
+                fp.block_size_actual_ = std::min(remain_items, fence_pointer_block_size_);
+                this->fence_pointers_.push_back(fp);
+            }
         }
     }
 
@@ -105,7 +102,6 @@ SSTable::SSTable(int level_num, const std::string& file_path,
     this->min_key_ = std::numeric_limits<long>::max();
     this->max_key_ = std::numeric_limits<long>::min();
 
-    this->fence_ptr_count_ = 0;
     // TODO: Bloom filter: setting and loading eagerly
 
     std::ifstream bf_infile(bf_file_path_, std::ios::binary);
@@ -277,7 +273,6 @@ bool SSTable::loadFromDisk() {
     }
     data_loaded_ = true;
 
-
     // TODO: attempt loading bloom filter
     // placeholder constructor might have already loaded it
     // if num_bits_ is 0 but we've loaded the data, 
@@ -290,6 +285,21 @@ bool SSTable::loadFromDisk() {
             new_bf.add(dataPair.key_);
         }
         this->bloom_filter_ = new_bf;
+    }
+
+    // TODO: build fence pointers using loaded data
+    this->fence_pointers_.clear();
+    if (this->size_ > 0) {
+        // add fence pointers
+        for (size_t i = 0; i < this->size_; i += fence_pointer_block_size_) {
+            fence_ptr fp;
+            fp.min_key = this->table_data_[i].key_;
+            fp.data_offset = i;
+
+            size_t remain_items = this->size_ - i;
+            fp.block_size_actual_ = std::min(remain_items, fence_pointer_block_size_);
+            this->fence_pointers_.push_back(fp);
+        }
     }
 
     return true;
@@ -314,11 +324,42 @@ void SSTableSnapshot::printSSTable() const {
     }
 }
 
-std::optional<DataPair> SSTable::getDataPair(long key) {
-    if (!keyInRange(key)) {
+// return [start_index, end_index_exclusive) in table_data
+// returns nullopt if key outside fence pointer ranges
+// min/max already checked in SSTable before calling this function
+std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(long key) const {
+    if (this->size_ == 0) {
+        return std::nullopt;
+    }
+    if (this->fence_pointers_.empty()) {
+        std::cout << "[SSTable] no fence pointers, returning full range" << std::endl;
+        return {{0, this->size_}};
+    }
+    if (key < fence_pointers_.front().min_key) {
         return std::nullopt;
     }
 
+    // binary search on fence pointers to find the block
+    // return first time key < fp.min_key is false, 
+    auto it = std::upper_bound(fence_pointers_.begin(), fence_pointers_.end(), key,
+        [](long key, const fence_ptr& fp) {
+            return key < fp.min_key;
+        });
+    
+    // now it will be the first fence pointer that is greater than key,
+    // or fence_pointers.end() if key >= all min_keys
+    // assume this function is only called when key is in SSTable's range
+    auto prev_fence_ptr = std::prev(it);
+
+    size_t block_start_offset = prev_fence_ptr->data_offset;
+    size_t block_end_offset = block_start_offset + prev_fence_ptr->block_size_actual_;
+
+    // check if the key is in the range of this block
+    return {{block_start_offset, block_end_offset}};
+}
+
+// assume the data must be within the current SSTable range, having checked bloom filter
+std::optional<DataPair> SSTable::getDataPair(long key) {
     // persistence check: if data not loaded, load from disk
     if (!data_loaded_) {
         // load from disk
@@ -327,14 +368,43 @@ std::optional<DataPair> SSTable::getDataPair(long key) {
             return std::nullopt;
         }
     }
-    // replace with binary search
-    auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
-    if (it != table_data_.end() && it->key_ == key) {
-        if (it->deleted_) {
-            return std::nullopt;
-        } else {
-            return *it;
+    // check if data is empty
+    if (table_data_.empty()) {
+        return std::nullopt;
+    }
+
+    // use fence pointers to find the range of the key
+    size_t start_index = 0;
+    size_t end_index_exclusive = table_data_.size();
+
+    std::optional<std::pair<size_t, size_t>> block_range = getFenceRange(key);
+    if (block_range.has_value()) {
+        start_index = block_range.value().first;
+        end_index_exclusive = block_range.value().second;
+        // quick sanity check
+        if (start_index >= end_index_exclusive || 
+            end_index_exclusive > this->size_) {
+            std::cerr << "[SSTable] invalid range for key " << key 
+                      << " in SSTable " << file_path_ << std::endl;
+            start_index = 0;
+            end_index_exclusive = this->size_;
         }
+    }
+
+    // search within the fence pointer block range
+    auto block_begin_it = table_data_.begin() + start_index;
+    auto block_end_it = table_data_.begin() + end_index_exclusive;
+
+    // TODO: replace with binary search
+    auto it = std::lower_bound(block_begin_it, block_end_it, key,
+                                [](const DataPair& dataPair, long key) {
+                                    return dataPair.key_ < key;
+                                });
+    // auto it = std::lower_bound(block_begin_it, block_end_it, key);
+    if (it != block_end_it && it->key_ == key) {
+        // always return, even if tombstone/deleted, so we can check in the return
+        // and avoid keyInSSTable() check
+        return *it;
     }
     return std::nullopt;
 }
@@ -906,15 +976,15 @@ std::optional<DataPair> LSMTree::getData(long key) {
             if (!cur_sstable->keyInRange(key)) {
                 continue;
             }
-            // TODO: now actually search the sstable, using fence pointers
+
+            // use fence pointers in getDataPair, now that we know it's in it
             std::optional<DataPair> data_search_res = cur_sstable->getDataPair(key);
             if (data_search_res.has_value()) {
-                return data_search_res;
-            } else {
-                if (cur_sstable->keyInSSTable(key)) {
-                    // tombstone
+                // need to check for tombstone
+                if (data_search_res.value().deleted_) {
                     return std::nullopt;
                 }
+                return data_search_res;
             }
         }
     }

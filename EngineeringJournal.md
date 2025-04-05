@@ -114,3 +114,8 @@ Last bit of work:
 - For 1GB put 10MB get, it adds 50 sec to put, but keeps get at 3 seconds. 
 - Constant I/O takes a lot of time. I will consider moving the bloom filter to Level, 
 and have one bloom filter per level instead. 
+
+4/5:
+- Added fence pointers
+- changed SSTable search to binary search
+- put 1GB takes even longer now (6m instead of 5m), and read (10MB) is 3s, like before...

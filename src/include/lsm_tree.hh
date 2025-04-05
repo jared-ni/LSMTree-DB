@@ -42,9 +42,11 @@ class DataPair {
 
 struct fence_ptr {
     long min_key;
-    long max_key;
+    // long max_key;
     // where the block starts in the file
-    size_t file_offset; 
+    // size_t file_offset; 
+    size_t data_offset;
+    size_t block_size_actual_;
 };
 
 // snapshots of the states
@@ -89,14 +91,17 @@ class SSTable {
     BloomFilter bloom_filter_;
 
     // TODO: array of fence pointers for binary search on each block
-    int fence_ptr_count_; // size_ / FENCE_PTR_BLOCK_SIZE
+    // int fence_ptr_count_; // size_ / FENCE_PTR_BLOCK_SIZE
     std::vector<fence_ptr> fence_pointers_;
     // size of each fence pointer block, used for binary search
+    size_t fence_pointer_block_size_ = FENCE_PTR_BLOCK_SIZE;
 
     // persistence:
     // maybe use lazy-loading, only load data when needed
     std::vector<DataPair> table_data_;
     bool data_loaded_;
+
+    std::optional<std::pair<size_t, size_t>> getFenceRange(long key) const;
 
     bool writeToDisk() const;
     bool loadFromDisk();
