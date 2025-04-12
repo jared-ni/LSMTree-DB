@@ -308,6 +308,8 @@ bool SSTable::loadFromDisk() {
 
 
 void SSTable::printSSTable() const {
+    std::lock_guard<std::mutex> lock(sstable_mutex_);
+
     if (!data_loaded_) {
         std::cout << "(SSTable on disk: " << file_path_ << " size: " << size_
                   << " range: [" << min_key_ << "," << max_key_ << "]) ";
@@ -362,6 +364,8 @@ std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(long key) const 
 std::optional<DataPair> SSTable::getDataPair(long key) {
     // persistence check: if data not loaded, load from disk
     if (!data_loaded_) {
+        // TODO: lock before checking data and loading
+        std::lock_guard<std::mutex> lock(this->sstable_mutex_);
         // load from disk
         if (!loadFromDisk()) {
             std::cerr << "[SSTable] failed to load SSTable from disk: " << file_path_ << std::endl;
@@ -400,7 +404,7 @@ std::optional<DataPair> SSTable::getDataPair(long key) {
                                 [](const DataPair& dataPair, long key) {
                                     return dataPair.key_ < key;
                                 });
-    auto it = std::lower_bound(block_begin_it, block_end_it, key);
+    // auto it = std::lower_bound(block_begin_it, block_end_it, key);
     if (it != block_end_it && it->key_ == key) {
         // always return, even if tombstone/deleted, so we can check in the return
         // and avoid keyInSSTable() check
@@ -444,19 +448,23 @@ Level::Level(int level_num, size_t table_capacity) {
 }
 
 std::vector<std::shared_ptr<SSTable>> Level::getSSTables() const {
+    // lock the level mutex when getting it
+    std::lock_guard<std::mutex> lock(level_mutex_);
     return sstables_;
 }
 
-
+// LOCKED when add sstable
 void Level::addSSTable(std::shared_ptr<SSTable> sstable_ptr) {
-    // std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(level_mutex_);
+
     sstables_.push_back(sstable_ptr);
     cur_total_entries_ += sstable_ptr->size_;
     cur_table_count_++;
 }
 
 void Level::removeSSTable(std::shared_ptr<SSTable> sstable_ptr) {
-    // std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(level_mutex_);
+
     auto it = std::find(sstables_.begin(), sstables_.end(), sstable_ptr);
     if (it != sstables_.end()) {
         cur_total_entries_ -= (*it)->size_;
@@ -466,7 +474,8 @@ void Level::removeSSTable(std::shared_ptr<SSTable> sstable_ptr) {
 }
 
 void Level::removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& tables_to_remove) {
-    // std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(level_mutex_);
+
     if (tables_to_remove.empty() || sstables_.empty()) {
         return;
     }
@@ -497,14 +506,14 @@ void Level::removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& table
 }
 
 // two conditions to trigger compaction!!
+// LOCKED
 bool Level::needsCompaction() const {
-    // std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(level_mutex_);
     return (cur_table_count_ >= table_capacity_);
     // || (cur_total_entries_ >= entries_capacity_);
 }
 
 void Level::printLevel() const{
-    // std::shared_lock<std::shared_mutex> lock(mutex_);
     // iterate through every sstable
     std::cout << "[Level " << level_num_ << "] ";
     for (int i = 0; i < sstables_.size(); i++) {
@@ -536,6 +545,8 @@ Buffer::Buffer(size_t capacity, size_t cur_size) {
 }
 
 bool Buffer::isFull() const {
+    // lock the buffer mutex
+    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
     return cur_size_ >= capacity_;
 }
 
@@ -561,7 +572,11 @@ void Buffer::printBuffer() const {
 // }
 
 // buffer is sorted, so flush to level 1 is much easier
+// TODO: refactor to use a tree/skip list, or add binary search
 bool Buffer::putData(const DataPair& data) {
+    // first load the buffer
+    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+
     // search through buffer to see if data exists, if so, update it
     // will be more efficient once I refactor to a tree/skip list
     auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), data.key_);
@@ -577,6 +592,8 @@ bool Buffer::putData(const DataPair& data) {
 }
 
 std::optional<DataPair> Buffer::getData(long key) const {
+    // lock the get operation in the buffer
+    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
 
     // search through buffer to see if data exists, for now
     auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
@@ -863,7 +880,6 @@ std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
         if (!level_ptr) continue;
 
         LevelSnapshot level_snap;
-        // std::shared_lock<std::shared_mutex> lock(level_ptr->mutex_);
 
         // basic level info
         level_snap.level_num = level_ptr->level_num_;
@@ -895,20 +911,28 @@ std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
 }
 
 void LSMTree::flushBuffer() {
-    // lock mutex
-    // std::lock_guard<std::mutex> lock(flush_mutex_);
+    // need to lock buffer before accessing it
     // flush buffer to level 0
-    if (buffer_->buffer_data_.empty()) {
+    std::vector<DataPair> data_to_flush;
+    bool buffer_was_empty = true;
+    // ciritical section: access and clear buffer
+    {
+        std::lock_guard<std::mutex> buffer_lock(buffer_->buffer_mutex_);
+        if (buffer_->buffer_data_.empty()) {
+            return;
+        }
+        data_to_flush = buffer_->buffer_data_;
+        buffer_->buffer_data_.clear();
+        buffer_->cur_size_ = 0;
+        buffer_was_empty = false;
+    }
+    // if buffer is empty, we don't flush
+    if (buffer_was_empty) {
         return;
     }
-    // std::cout << "[LSMTree] Flushing buffer..." << std::endl;
-
-    // data from buffer
-    // this performs a deep copy of the buffer data to ensure we have a snapshot of the data to flush
-    std::vector<DataPair> data_to_flush = buffer_->buffer_data_;
-    // TODO: 
-    buffer_->buffer_data_.clear();
-    buffer_->cur_size_ = 0;
+    
+    // now for flush operation, lock flush_mutex_
+    std::lock_guard<std::mutex> flush_lock(flush_mutex_);
 
     // generate new level 0 SSTable id and file path
     uint64_t new_file_id = next_file_id_++;
@@ -932,17 +956,27 @@ void LSMTree::flushBuffer() {
     levels_[0]->addSSTable(sstable_ptr);
 
     // trigger compaction check before adding to Level 0 in memory
-    checkCompaction(0);
-
-    // std::cout << "[LSMTree] Flushed SSTable " << new_file_id << " to Level 0" << std::endl;
-    // levels_[0]->printLevel();
+    {
+        // acquire compaction lock, to ensure it's acquired one time
+        std::lock_guard<std::mutex> compaction_lock(compaction_mutex_);
+        this->checkCompaction(0);
+    }
 }
 
 bool LSMTree::putData(const DataPair& data) {
     bool rt = buffer_->putData(data);
     // if level is full, flush. put data in buffer either way
-    if (buffer_->isFull()) {
-        flushBuffer();
+
+    // isfull locks buffer_mutex_
+    bool should_flush = false;
+    {
+        if (buffer_->isFull()) {
+            should_flush = true;
+        }
+    }
+    // flushBuffer locks flush_mutex_
+    if (should_flush) {
+        this->flushBuffer();
     }
 
     return rt;
@@ -950,6 +984,7 @@ bool LSMTree::putData(const DataPair& data) {
 
 std::optional<DataPair> LSMTree::getData(long key) {
     // search buffer first
+    // getData locks buffer_mutex_
     std::optional<DataPair> data_pair = buffer_->getData(key);
     if (data_pair.has_value()) {
         if (data_pair.value().deleted_) {
@@ -964,6 +999,7 @@ std::optional<DataPair> LSMTree::getData(long key) {
     for (size_t level_i = 0; level_i < levels_.size(); level_i++) {
         const auto& cur_level = levels_[level_i];
         // skip level if bloom filter says key not in level
+        // getSSTables locks level_mutex_
         const auto& cur_sstables = cur_level->getSSTables();
 
         for (const auto& cur_sstable : cur_sstables) {
@@ -1008,6 +1044,19 @@ bool LSMTree::deleteData(long key) {
     // mark data in buffer as tombstone, if found
     DataPair tombstone_data(key, 0, true);
     bool success = buffer_->putData(tombstone_data);
+    
+    // because we add the tombstone, we might need to flush
+    bool should_flush = false;
+    {
+        if (buffer_->isFull()) {
+            should_flush = true;
+        }
+    }
+
+    if (should_flush) {
+        this->flushBuffer();
+    }
+
     return success;
 }
 
@@ -1041,107 +1090,91 @@ bool LSMTree::checkCompaction(size_t level_index) {
     if (level_index >= levels_.size()) {
         return false;
     }
-    auto& cur_level = levels_[level_index];
     // need to flush first before adding new sstable if current level is full
+    bool needs_compaction = false;
+    {
+        // needsCompaction locks level_mutex_
+        needs_compaction = levels_[level_index]->needsCompaction();
+    }
 
-    bool needs_compaction = cur_level->needsCompaction();
     if (needs_compaction) {
         // std::cout << "[LSMTree] Level " << level_index << " needs compaction..." << std::endl;
+        // compactLevel locks compaction_mutex_
         compactLevel(level_index);
+        return true;
     }
-    return true;
+    return false;
 }
 
 // basic tiering
+// this is the first call to compactLevel, which has the global compaction_lock
+// subsequent recursive calls don't have the lock
 void LSMTree::compactLevel(size_t level_index) {
-    // TODO: coarse grained lock for now
-    // std::lock_guard<std::mutex> compaction_lock(compaction_mutex_);
+    // global compaction lock go before calling compaction check
+    if (level_index >= levels_.size()) {
+        std::cerr << "[LSMTree] Invalid level index for compaction: " << level_index << std::endl;
+        return;
+    }
 
-    // Check needsCompaction status within the lock if using fine-grained locking later.
-    // For now, we re-check, similar to before.
+    // re-check needsCompaction while holding the global lock to avoid race
+    bool needs_compaction = false;
     {
-        // std::shared_lock<std::shared_mutex> lock(levels_[level_index]->mutex_);
-        // Use the existing needsCompaction which might use >= threshold
-        if (!levels_[level_index]->needsCompaction()) {
-            // std::cout << "[LSMTree] Race condition or no longer needs compaction for Level " << level_index << ". Skipping." << std::endl;
-            return;
-        }
+        needs_compaction = levels_[level_index]->needsCompaction();
+    }
+    if (!needs_compaction) {
+        return;
     }
 
     size_t next_level_index = level_index + 1;
     if (next_level_index >= levels_.size()) {
         // std::cout << "[LSMTree] Level " << level_index << " is the last level, no compaction" << std::endl;
-        // Tiered compaction usually stops at the last level or has a different strategy there.
-        // For now, we just stop.
+        // tiered compaction stops at the last level
+        return;
+    }
+    if (!levels_[next_level_index]) {
+        std::cerr << "[LSMTree Compaction ERROR] Next level " << next_level_index << " does not exist." << std::endl;
         return;
     }
 
-    // std::cout << "[LSMTree Tiered] starting compaction for level " << level_index << " into level " << next_level_index << std::endl;
-
-    // compaction participants
+    // tiered compaction: merge all tables in the current level into the next level
+    // compaction participants: input tables level next is always empty for tiering
     std::vector<std::shared_ptr<SSTable>> input_tables_level;
-    std::vector<std::shared_ptr<SSTable>> input_tables_level_next; // Will remain empty for basic tiering
+    std::vector<std::shared_ptr<SSTable>> input_tables_level_next;
 
-    { // Scope for reading level contents (needs locking if concurrent)
-
-        // Select ALL tables from the current level (tier) for compaction
-        input_tables_level = levels_[level_index]->getSSTables();
-
-        // Ensure the level wasn't empty if needsCompaction was true
-        if (input_tables_level.empty()) {
-             std::cerr << "[LSMTree Tiered] Compaction triggered on empty level " << level_index << "? Aborting." << std::endl;
-             return;
-        }
-
-        // In basic tiering, we don't select overlapping tables from the next level as direct merge input.
-        input_tables_level_next.clear();
-
-    } // End scope for reading levels
-
-
-    // Abort if somehow no tables were selected (shouldn't happen after the check above)
+    // Select ALL tables from the current level (tier) for compaction
+    // getSSTables locks level_mutex_
+    input_tables_level = levels_[level_index]->getSSTables();
     if (input_tables_level.empty()) {
-        // std::cout << "[LSMTree Tiered] No input tables selected from L" << level_index << ". Aborting." << std::endl;
+        std::cerr << "[LSMTree Compaction ERROR] No tables in current level " << level_index << " to compact." << std::endl;
         return;
     }
-
-    // std::cout << "[LSMTree Tiered] Merging " << input_tables_level.size() << " tables from Tier " << level_index
-    //           << " into Tier " << next_level_index << std::endl; // Modified log message slightly
 
     // Perform merge logic - mergeSSTables now takes an empty input_tables_level_next
     std::vector<std::shared_ptr<SSTable>> output_tables;
     try {
+        // mergeSSTables doesn't lock levels_ since it copies the data when merging them
         output_tables = mergeSSTables(input_tables_level,
-                                     input_tables_level_next, // Pass the empty vector
-                                     next_level_index);
+                                      input_tables_level_next,
+                                      next_level_index);
     } catch (const std::exception& e) {
-         std::cerr << "Error during tiered SSTable merge: " << e.what() << std::endl;
-         // Handle error, potentially clean up partial output files if possible
-         return; // Abort compaction on merge error
+        std::cerr << "Error during tiered SSTable merge: " << e.what() << std::endl;
+        return;
     }
 
+    // atomic replace in memory: protected by compaction_mutex_
+    // removeAllSSTables locks level_mutex_
+    levels_[level_index]->removeAllSSTables(input_tables_level);
 
-    // atomic replace in memory
-    {
-        // std::unique_lock<std::shared_mutex> lock1(levels_[level_index]->mutex_);
-        // std::unique_lock<std::shared_mutex> lock2(levels_[next_level_index]->mutex_);
-
-        // Remove ALL input tables from the current level (tier)
-        levels_[level_index]->removeAllSSTables(input_tables_level);
-        levels_[next_level_index]->removeAllSSTables(input_tables_level_next);
-        for (const auto& table : output_tables) {
-            levels_[next_level_index]->addSSTable(table);
-        }
+    for (const auto& table : output_tables) {
+        levels_[next_level_index]->addSSTable(table);
     }
+
+    // TODO: updateHistory
+
     // delete the SSTable files that were merged from the current level
     for (const auto& table : input_tables_level) {
         deleteSSTableFile(table);
     }
-
-    // std::cout << "[LSMTree Tiered] finished compaction, added " << output_tables.size()
-    //           << " new tables to Tier " << next_level_index << "." << std::endl;
-    // levels_[level_index]->printLevel();
-    // levels_[next_level_index]->printLevel();
 
     // after compacted this level, compact the next if needed
     checkCompaction(next_level_index);

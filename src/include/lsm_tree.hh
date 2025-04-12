@@ -101,6 +101,9 @@ class SSTable {
     std::vector<DataPair> table_data_;
     bool data_loaded_;
 
+    // TODO: synchronization: add a mutex to protect lazy loading in loadFromDisk
+    mutable std::mutex sstable_mutex_;
+
     std::optional<std::pair<size_t, size_t>> getFenceRange(long key) const;
 
     bool writeToDisk() const;
@@ -113,6 +116,7 @@ class SSTable {
     bool keyInRange(long key) const;
     bool keyInSSTable(long key);
     std::optional<DataPair> getDataPair(long key);
+
 };
 
 // each level of the LSM Tree
@@ -133,8 +137,9 @@ class Level {
 
     // tracks all SSTables on the current level
     std::vector<std::shared_ptr<SSTable>> sstables_;
-    // probably need a mutex for later
-    mutable std::shared_mutex mutex_;
+
+    // concurrency protection
+    mutable std::mutex level_mutex_;
 
     // SSTable methods
     // don't think raw ptr gon work; prevent dangling ptrs in multithreaded env
@@ -168,6 +173,9 @@ class Buffer {
     std::optional<DataPair> getData(long key) const;
     // std::vector<DataPair> getRangeData(long start, long end) const;
     // bool deleteData(long key);
+
+    // add concurrency protection for buffer synchronization
+    mutable std::mutex buffer_mutex_;
 };
 
 
@@ -193,6 +201,15 @@ class LSMTree {
     std::unique_ptr<Buffer> buffer_;
     // LSM tree owns the levels, so unique_ptr, and it coordinates buffer/level flushes
     std::vector<std::unique_ptr<Level>> levels_;
+
+    // LSMTree-level locks are for coordinating structural changes
+    // the put/get/delete are handled by Buffer/Level/SSTable locks
+
+    // flush_mutex_: one buffer flush at a time
+    std::mutex buffer_flush_mutex_;
+    std::mutex compaction_muteux_;
+    // compaction_mutex_: one compaction at a time, since it modifies multiple levels
+
 
     // for testing
     std::vector<LevelSnapshot> getLevelsSnapshot() const;

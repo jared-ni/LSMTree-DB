@@ -119,3 +119,10 @@ and have one bloom filter per level instead.
 - Added fence pointers
 - changed SSTable search to binary search
 - put 1GB takes even longer now (6m instead of 5m), and read (10MB) is 3s, like before...
+- maybe need to store this to disk? 
+- need to test fence pointers when SSTables are huge. 
+
+4/11:
+- attempt to make it concurrent and thread-safe
+- global flush and compaction mutexes, others are level/sstable/buffer specific. 
+- need to work on the multi-clients pool still. 

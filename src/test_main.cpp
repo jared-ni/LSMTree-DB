@@ -20,6 +20,12 @@ void create_temp_dir(const std::string& dir) {
              std::cerr << "Warning: Could not create temp directory " << dir << ": " << ec.message() << std::endl;
         }
     }
+    if (!std::filesystem::create_directory(dir + "/bloom_filters", ec)) {
+        if (ec && ec != std::errc::file_exists) {
+             std::cerr << "Warning: Could not create temp directory " << dir << ": " << ec.message() << std::endl;
+        }
+    }
+
 }
 
 // Helper function to remove the temporary directory
@@ -56,9 +62,10 @@ void test_sstable() {
     std::vector<DataPair> empty_data;
     // Need a valid path for the constructor to write to
     std::string empty_table_path = TEMP_SSTABLE_DIR + "/empty_table.sst";
+    std::string empty_bf_path = TEMP_SSTABLE_DIR + "/bloom_filters/empty_table.sst.bf";
     // Use try-catch as constructor now throws on write failure
     try {
-        SSTable empty_table(empty_data, 1, empty_table_path);
+        SSTable empty_table(empty_data, 1, empty_table_path, empty_bf_path);
         assert(empty_table.size_ == 0);
         assert(empty_table.min_key_ == std::numeric_limits<long>::max());
         assert(empty_table.max_key_ == std::numeric_limits<long>::min());
@@ -80,9 +87,10 @@ void test_sstable() {
         DataPair(5, 50)
     };
     std::string table_path = TEMP_SSTABLE_DIR + "/data_table.sst";
+    std::string bf_path = TEMP_SSTABLE_DIR + "/bloom_filters/data_table.sst.bf";
     try {
         // data and level1 SSTable
-        SSTable table(data, 1, table_path);
+        SSTable table(data, 1, table_path, bf_path);
         assert(table.size_ == 5);
         assert(table.min_key_ == 1);
         assert(table.max_key_ == 5);
@@ -116,7 +124,7 @@ void test_sstable() {
 
         // 6. test loadFromDisk functionality (optional but good)
         // Create a new SSTable object pointing to the same file, but unloaded
-        SSTable table_to_load(1, table_path);
+        SSTable table_to_load(1, table_path, bf_path);
         table_to_load.min_key_ = 1;
         table_to_load.max_key_ = 5;
         table_to_load.size_ = 5;
@@ -169,13 +177,14 @@ void test_level() {
     //need paths for the constructors
     std::string sstable1_path = TEMP_SSTABLE_DIR + "/level_sstable1.sst";
     std::string sstable2_path = TEMP_SSTABLE_DIR + "/level_sstable2.sst";
-    // define sstable3 path here too
     std::string sstable3_path = TEMP_SSTABLE_DIR + "/level_sstable3.sst";
-
+    std::string sstable1_bf_path = TEMP_SSTABLE_DIR + "/bloom_filters/level_sstable1.sst.bf";
+    std::string sstable2_bf_path = TEMP_SSTABLE_DIR + "/bloom_filters/level_sstable2.sst.bf";
+    std::string sstable3_bf_path = TEMP_SSTABLE_DIR + "/bloom_filters/level_sstable3.sst.bf";
 
     try {
-        std::shared_ptr<SSTable> sstable1 = std::make_shared<SSTable>(data1, 1, sstable1_path);
-        std::shared_ptr<SSTable> sstable2 = std::make_shared<SSTable>(data2, 1, sstable2_path);
+        std::shared_ptr<SSTable> sstable1 = std::make_shared<SSTable>(data1, 1, sstable1_path, sstable1_bf_path);
+        std::shared_ptr<SSTable> sstable2 = std::make_shared<SSTable>(data2, 1, sstable2_path, sstable2_bf_path);
 
         level.addSSTable(sstable1);
         assert(level.cur_table_count_ == 1);
@@ -231,7 +240,7 @@ void test_level() {
         std::cout << "Level getSSTables tests PASSED." << std::endl;
 
         // 7. test removing non-existent sstable: nothing should happen
-        std::shared_ptr<SSTable> sstable3 = std::make_shared<SSTable>(data1, 1, sstable3_path); // Create a different object
+        std::shared_ptr<SSTable> sstable3 = std::make_shared<SSTable>(data1, 1, sstable3_path, sstable3_bf_path);
         size_t count_before = level.cur_table_count_;
         size_t entries_before = level.cur_total_entries_;
         level.removeSSTable(sstable3);
@@ -323,29 +332,51 @@ void test_lsm_tree() {
 
     // Check initial state
     assert(lsm_tree.buffer_->cur_size_ == 0);
+
     for(size_t i = 0; i < total_levels; ++i) { assert(lsm_tree.levels_[i]->cur_table_count_ == 0); }
+
+    std::cout << "338" << std::endl;
+
     assert(lsm_tree.next_file_id_ == 1);
 
     // 2. initial Puts (Fill Buffer)
     lsm_tree.putData({1, 100}); // {1}
     lsm_tree.putData({2, 200}); // {1, 2}
+
+    std::cout << "346" << std::endl;
+
     assert(lsm_tree.buffer_->cur_size_ == 0);
     assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
 
     lsm_tree.putData({3, 300}); // {3}
     assert(lsm_tree.buffer_->cur_size_ == 1);
     lsm_tree.putData({4, 400}); // {}, l0 has 0 tables, l1 has 1 table
+
+    std::cout << "355" << std::endl;
+
     assert(lsm_tree.buffer_->cur_size_ == 0); 
     assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
     assert(lsm_tree.levels_[1]->cur_table_count_ == 1);
 
     lsm_tree.putData({5, 500}); // {5}
     lsm_tree.putData({6, 600}); // {}, l0 has 1 table, l1 has 2 tables
+
+    std::cout << "364" << std::endl;
+
     lsm_tree.putData({7, 700}); // {7}
+
+    std::cout << "368" << std::endl;
+    
     lsm_tree.putData({8, 800}); // {}, l0 has 0 tables, l1 has 0 tables, l2 has 1 table
+    // TODO: flushing from l1 to l2 has a deadlock issue? 
+
+    std::cout << "369" << std::endl;
+
     assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
     assert(lsm_tree.levels_[1]->cur_table_count_ == 0);
     assert(lsm_tree.levels_[2]->cur_table_count_ == 1);
+
+    std::cout << "372" << std::endl;
 
     remove_temp_dir(lsm_test_dir);
      std::cout << "Cleaned up test directory: " << lsm_test_dir << std::endl;
