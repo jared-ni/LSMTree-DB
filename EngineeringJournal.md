@@ -126,3 +126,12 @@ and have one bloom filter per level instead.
 - attempt to make it concurrent and thread-safe
 - global flush and compaction mutexes, others are level/sstable/buffer specific. 
 - need to work on the multi-clients pool still. 
+
+4/20:
+- reads: search async on each level. 
+- writes: 
+    - flushing in a background thread
+    - 
+
+    splitting across data: each thread is searching a level
+    splitting across query: client with 100 queries, 10 threads that do 10 queries / thread

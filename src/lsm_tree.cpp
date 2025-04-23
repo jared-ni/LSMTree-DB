@@ -939,6 +939,22 @@ void LSMTree::flushBuffer() {
     std::string new_file_path = getFilePath(0, new_file_id);
     std::string bf_file_path = getBloomFilterPath(0, new_file_id);
 
+    // error checks
+    // std::filesystem::path sst_path_check(new_file_path);
+    // std::filesystem::path bf_path_check(bf_file_path);
+    // std::filesystem::path sst_dir = sst_path_check.parent_path();
+    // std::filesystem::path bf_dir = bf_path_check.parent_path();
+    // if (!std::filesystem::exists(sst_dir) || !std::filesystem::is_directory(sst_dir)) {
+    //     std::cerr << "[FlushBuffer PRE-CHECK] SST directory missing: " << sst_dir.string() << std::endl;
+    //     next_file_id_--;
+    //     return;
+    // }
+    // if (!std::filesystem::exists(bf_dir) || !std::filesystem::is_directory(bf_dir)) {
+    //     std::cerr << "[FlushBuffer PRE-CHECK] BF directory missing: " << bf_dir.string() << std::endl;
+    //     next_file_id_--;
+    //     return;
+    // }
+
     std::shared_ptr<SSTable> sstable_ptr = nullptr;
     try {
         // create the SSTable object and write to disk

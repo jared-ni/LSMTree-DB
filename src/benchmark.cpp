@@ -71,10 +71,10 @@ int main(int argc, char *argv[]) {
     // Initialize the LSM Tree
     auto start = std::chrono::high_resolution_clock::now();
     LSMTree lsmTree("benchmark_db");
-    loadFileCommands("./experiments/put/1000MB_put.txt", &lsmTree);
+    // loadFileCommands("./experiments/put/1000MB_put.txt", &lsmTree);
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
-    std::cout << "Initial load time for 1000MB_put: " << duration << " seconds" << std::endl;
+    // std::cout << "Initial load time for 1000MB_put: " << duration << " seconds" << std::endl;
 
     loadFileCommands(workload_filename, &lsmTree);
     // Final duration after loading the workload
