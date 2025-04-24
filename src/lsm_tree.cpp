@@ -2,6 +2,7 @@
 #include <iostream>
 #include <queue>
 #include <algorithm>
+#include <shared_mutex>
 
 
 // helper function to generate SSTable filename
@@ -447,23 +448,28 @@ Level::Level(int level_num, size_t table_capacity) {
     this->cur_total_entries_ = 0;
 }
 
+// READ: shared locked
 std::vector<std::shared_ptr<SSTable>> Level::getSSTables() const {
     // lock the level mutex when getting it
-    std::lock_guard<std::mutex> lock(level_mutex_);
+    // std::lock_guard<std::mutex> lock(level_mutex_);
+    std::shared_lock lock(this->level_mutex_)
     return sstables_;
 }
 
-// LOCKED when add sstable
+// WRITE: uniquely LOCKED when add sstable
 void Level::addSSTable(std::shared_ptr<SSTable> sstable_ptr) {
-    std::lock_guard<std::mutex> lock(level_mutex_);
+    // std::lock_guard<std::mutex> lock(level_mutex_);
+    std::unique_lock lock(this->level_mutex_);
 
     sstables_.push_back(sstable_ptr);
     cur_total_entries_ += sstable_ptr->size_;
     cur_table_count_++;
 }
 
+// write: uniquely LOCKED
 void Level::removeSSTable(std::shared_ptr<SSTable> sstable_ptr) {
-    std::lock_guard<std::mutex> lock(level_mutex_);
+    // std::lock_guard<std::mutex> lock(level_mutex_);
+    std::unique_lock lock(level_mutex_);
 
     auto it = std::find(sstables_.begin(), sstables_.end(), sstable_ptr);
     if (it != sstables_.end()) {
@@ -473,8 +479,10 @@ void Level::removeSSTable(std::shared_ptr<SSTable> sstable_ptr) {
     }
 }
 
+// write: uniqued LOCKED
 void Level::removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& tables_to_remove) {
-    std::lock_guard<std::mutex> lock(level_mutex_);
+    // std::lock_guard<std::mutex> lock(level_mutex_);
+    std::unique_lock lock(level_mutex_);
 
     if (tables_to_remove.empty() || sstables_.empty()) {
         return;
@@ -505,10 +513,12 @@ void Level::removeAllSSTables(const std::vector<std::shared_ptr<SSTable>>& table
     cur_table_count_ = new_table_count;
 }
 
+
 // two conditions to trigger compaction!!
-// LOCKED
+// read: shared lock
 bool Level::needsCompaction() const {
-    std::lock_guard<std::mutex> lock(level_mutex_);
+    // std::lock_guard<std::mutex> lock(level_mutex_);
+    std::shared_lock lock(level_mutex_);
     return (cur_table_count_ >= table_capacity_);
     // || (cur_total_entries_ >= entries_capacity_);
 }
@@ -546,7 +556,8 @@ Buffer::Buffer(size_t capacity, size_t cur_size) {
 
 bool Buffer::isFull() const {
     // lock the buffer mutex
-    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+    // std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+    std::shared_lock lock(this->buffer_mutex_);
     return cur_size_ >= capacity_;
 }
 
@@ -575,7 +586,9 @@ void Buffer::printBuffer() const {
 // TODO: refactor to use a tree/skip list, or add binary search
 bool Buffer::putData(const DataPair& data) {
     // first load the buffer
-    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+    // exclusive lock on the write to buffer
+    // std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+    std::unique_lock lock(this->buffer_mutex_);
 
     // search through buffer to see if data exists, if so, update it
     // will be more efficient once I refactor to a tree/skip list

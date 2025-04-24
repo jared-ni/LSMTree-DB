@@ -138,8 +138,9 @@ class Level {
     // tracks all SSTables on the current level
     std::vector<std::shared_ptr<SSTable>> sstables_;
 
-    // concurrency protection
-    mutable std::mutex level_mutex_;
+    // concurrency protection: shared mutex for read
+    // mutable std::mutex level_mutex_;
+    mutable std::shared_mutex level_mutex_;
 
     // SSTable methods
     // don't think raw ptr gon work; prevent dangling ptrs in multithreaded env
@@ -165,6 +166,11 @@ class Buffer {
     // need to refactor to balanced binary tree, skip list, or B tree
     std::vector<DataPair> buffer_data_;
 
+    // add concurrency protection for buffer synchronization
+    // mutable std::mutex buffer_mutex_;
+    // add shared mutex, so read can acquire shared lock, while write acquires exclusive locks
+    mutable std::shared_mutex buffer_mutex_;
+
     void printBuffer() const;
     bool isFull() const;
     std::shared_ptr<SSTable> flushBuffer();
@@ -173,9 +179,6 @@ class Buffer {
     std::optional<DataPair> getData(long key) const;
     // std::vector<DataPair> getRangeData(long start, long end) const;
     // bool deleteData(long key);
-
-    // add concurrency protection for buffer synchronization
-    mutable std::mutex buffer_mutex_;
 };
 
 
