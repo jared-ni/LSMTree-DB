@@ -3,7 +3,8 @@
 #include <queue>
 #include <algorithm>
 #include <shared_mutex>
-
+#include <chrono>
+#include <future>
 
 // helper function to generate SSTable filename
 inline std::string generateSSTableFilename(uint64_t file_id) {
@@ -452,7 +453,7 @@ Level::Level(int level_num, size_t table_capacity) {
 std::vector<std::shared_ptr<SSTable>> Level::getSSTables() const {
     // lock the level mutex when getting it
     // std::lock_guard<std::mutex> lock(level_mutex_);
-    std::shared_lock lock(this->level_mutex_)
+    std::shared_lock lock(this->level_mutex_);
     return sstables_;
 }
 
@@ -604,9 +605,10 @@ bool Buffer::putData(const DataPair& data) {
     return true;
 }
 
+// get data from buffer, shared mutex
 std::optional<DataPair> Buffer::getData(long key) const {
     // lock the get operation in the buffer
-    std::lock_guard<std::mutex> lock(this->buffer_mutex_);
+    std::shared_lock<std::shared_mutex> lock(this->buffer_mutex_);
 
     // search through buffer to see if data exists, for now
     auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
@@ -652,7 +654,44 @@ LSMTree::LSMTree(const std::string& db_path,
 
     // configure file system
     setupDB();
+
+    // start background threads
+    this->flusher_thread_ = std::thread(&LSMTree::flushThreadLoop, this);
+    this->compactor_thread_ = std::thread(&LSMTree::compactThreadLoop, this);
+
+    std::cout << "[LSMTree] Started 1 flusher and " 
+              << " 1 compactor thread." << std::endl;
 }
+
+// destructor for thread consistency
+LSMTree::~LSMTree() {
+    shutdown();
+    std::cout << "[LSMTree] Shutdown complete." << std::endl;
+}
+
+// shutdown function for a background thread
+void LSMTree::shutdown() {
+    // set to three and return val before set
+    if (shutdown_requested_.exchange(true)) {
+        return;
+    }
+    std::cout << "[LSMTree] Shutdown requested. Waiting for threads to finish..." << std::endl;
+
+    // wake up all threads to check shutdown flag
+    flush_request_cv_.notify_all();
+    compaction_task_cv_.notify_all();
+
+    // TODO: join threads
+    if (flusher_thread_.joinable()) {
+        flusher_thread_.join();
+        std::cout << "[LSMTree] Flusher thread joined." << std::endl;
+    }
+    if (compactor_thread_.joinable()) {
+        compactor_thread_.join();
+        std::cout << "[LSMTree] Compactor thread joined." << std::endl;
+    }
+}
+
 
 void LSMTree::setupDB() {
     std::error_code ec;
@@ -930,7 +969,7 @@ void LSMTree::flushBuffer() {
     bool buffer_was_empty = true;
     // ciritical section: access and clear buffer
     {
-        std::lock_guard<std::mutex> buffer_lock(buffer_->buffer_mutex_);
+        std::unique_lock<std::shared_mutex> buffer_lock(buffer_->buffer_mutex_);
         if (buffer_->buffer_data_.empty()) {
             return;
         }
@@ -993,6 +1032,9 @@ void LSMTree::flushBuffer() {
 }
 
 bool LSMTree::putData(const DataPair& data) {
+    if (shutdown_requested_) {
+        return false;
+    }
     bool rt = buffer_->putData(data);
     // if level is full, flush. put data in buffer either way
 
@@ -1004,14 +1046,23 @@ bool LSMTree::putData(const DataPair& data) {
         }
     }
     // flushBuffer locks flush_mutex_
+    // to parallelize, use a conditional variable that flusher thread waits on
+    // single thread: call flushBuffer directly
     if (should_flush) {
-        this->flushBuffer();
+        // the flush_mutex now only protects the flush_needed_ variable
+        std::lock_guard lock(this->flush_mutex_);
+        this->flush_needed_ = true;
+        flush_request_cv_.notify_one();
+        // this->flushBuffer();
     }
 
     return rt;
 }
 
 std::optional<DataPair> LSMTree::getData(long key) {
+    // in case shut down thread
+    if (shutdown_requested_) return std::nullopt;
+
     // search buffer first
     // getData locks buffer_mutex_
     std::optional<DataPair> data_pair = buffer_->getData(key);
@@ -1032,13 +1083,13 @@ std::optional<DataPair> LSMTree::getData(long key) {
         const auto& cur_sstables = cur_level->getSSTables();
 
         for (const auto& cur_sstable : cur_sstables) {
-            // TODO: check bloom filter
-            if (!cur_sstable->bloom_filter_.might_contain(key)) {
+            // check range: if not in range, continue
+            if (!cur_sstable->keyInRange(key)) {
                 continue;
             }
 
-            // check range: if not in range, continue
-            if (!cur_sstable->keyInRange(key)) {
+            // TODO: check bloom filter
+            if (!cur_sstable->bloom_filter_.might_contain(key)) {
                 continue;
             }
 
@@ -1058,6 +1109,8 @@ std::optional<DataPair> LSMTree::getData(long key) {
 
 // TODO: need to implement still
 void LSMTree::rangeData(long low, long high) {
+    if (shutdown_requested_) return;
+
     for (int i = low; i < high; i++) {
         std::optional<DataPair> data_pair = getData(i);
         if (data_pair.has_value()) {
@@ -1072,24 +1125,9 @@ void LSMTree::rangeData(long low, long high) {
 bool LSMTree::deleteData(long key) {
     // mark data in buffer as tombstone, if found
     DataPair tombstone_data(key, 0, true);
-    bool success = buffer_->putData(tombstone_data);
     
-    // because we add the tombstone, we might need to flush
-    bool should_flush = false;
-    {
-        if (buffer_->isFull()) {
-            should_flush = true;
-        }
-    }
-
-    if (should_flush) {
-        this->flushBuffer();
-    }
-
-    return success;
+    this->putData(tombstone_data);
 }
-
-
 
 // persistence
 // delete the SSTable file and its bloom filter
@@ -1209,7 +1247,7 @@ void LSMTree::compactLevel(size_t level_index) {
     checkCompaction(next_level_index);
 }
 
-// merge function for two SSTables
+// merge function for multiple SSTables, returns a list of SSTables limited by size
 // TODO: merge logic not optimized
 std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     const std::vector<std::shared_ptr<SSTable>>& level_l_tables,
@@ -1307,4 +1345,211 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     }
 
     return output_sstables;
+}
+
+// background thread loops for flushing and compaction
+// asleep in wait, and only acquires the flush_mutex_ when it is notified/waked
+void LSMTree::flushThreadLoop() {
+    std::cout << "[Flusher Thread] Started." << std::endl;
+    while (true) {
+        bool should_flush = false;
+        {
+            std::unique_lock lock(this->flush_mutex_);
+            // wait until notified: then check flush_needed_
+            flush_request_cv_.wait(lock, [this] {
+                return shutdown_requested_ || flush_needed_;
+            });
+            // spurious wake-up
+            if (flush_needed_) {
+                should_flush = true;
+                flush_needed_ = false;
+            }
+        }
+
+        if (should_flush) {
+            flushBufferHelper();
+            // check if L0 now needs compaction, after the flush
+            doCompactionCheck(0);
+        }
+        if (shutdown_requested_.load()) {
+            break;
+        }
+    }
+    std::cout << "[Flusher Thread] Exiting." << std::endl;
+}
+
+// compactorLoop
+void LSMTree::compactThreadLoop() {
+    std::cout << "[Compactor Thread " << std::this_thread::get_id() 
+              << "] Started." << std::endl;
+
+    while (true) {
+        size_t level_to_compact = -1;
+        {
+            std::unique_lock lock(this->compaction_mutex_);
+            // get notified if compaction task is available
+            compaction_task_cv_.wait(lock, [this]{
+                return shutdown_requested_.load() || !compaction_tasks_.empty();
+            });
+
+            // spurious wake-up check
+            // take the front of the tasks, FIFO style
+            if (!compaction_tasks_.empty()) {
+                level_to_compact = compaction_tasks_.front();
+                compaction_tasks_.pop();
+            }
+        }
+
+        // we have a level to compact
+        if (level_to_compact != -1 && level_to_compact < levels_.size() - 1) {
+            try {
+                // compact current level, and check the next one right after
+                compactLevelHelper(level_to_compact);
+                // do compaction check for next level
+                doCompactionCheck(level_to_compact + 1);
+            } catch (const std::exception& e) {
+                std::cerr << "[Compactor Thread " << std::this_thread::get_id() 
+                          << "] Exception during compaction of level "
+                          << level_to_compact << ": " << e.what() << std::endl;
+            }
+        }
+        // the last level is not compacted, so do nothing lol
+        if (shutdown_requested_.load()) {
+            std::cout << "[Compactor Thread " << std::this_thread::get_id() << "] Exiting." << std::endl;
+            break;
+        }
+    }
+}
+
+void LSMTree::flushBufferHelper() {
+    std::vector<DataPair> data_to_flush;
+    bool buffer_was_empty = true;
+    // lock buffer and get data
+    {
+        std::unique_lock buffer_lock(buffer_->buffer_mutex_);
+        if (buffer_->buffer_data_.empty()) {
+            return;
+        }
+        data_to_flush = buffer_->buffer_data_;
+        buffer_->buffer_data_.clear();
+        buffer_->cur_size_ = 0;
+        buffer_was_empty = false;
+    }
+    // if buffer is empty, we don't flush
+    if (buffer_was_empty) {
+        return;
+    }
+
+    // generate new level 0 SSTable id and file path
+    uint64_t new_file_id = next_file_id_.fetch_add(1);
+    std::string new_file_path = getFilePath(0, new_file_id);
+    std::string bf_file_path = getBloomFilterPath(0, new_file_id);
+    std::shared_ptr<SSTable> sstable_ptr = nullptr;
+
+    try {
+        // create the SSTable object and write to disk
+        sstable_ptr = std::make_shared<SSTable>(data_to_flush, 0, new_file_path, bf_file_path);
+        // std::cout << "[LSMTree] flushed buffer to new SSTable file: " << new_file_path << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "can't create/write SSTable during flush: " << e.what() << std::endl;
+        // If file creation failed revert file id
+        next_file_id_--;
+        // maybe throw error here? idk
+        return;
+    }
+
+    // add the new SSTable pointer to level 0's list
+    levels_[0]->addSSTable(sstable_ptr);
+
+    // trigger compaction check before adding to Level 0 in memory
+    // this step is now done in the compaction thread
+    // {
+    //     // acquire compaction lock, to ensure it's acquired one time
+    //     std::lock_guard<std::mutex> compaction_lock(compaction_mutex_);
+    //     this->checkCompaction(0);
+    // }
+}
+
+// check if compaction is needed for the given level
+void LSMTree::doCompactionCheck(size_t level_index) {
+    // if last level or shutdown requested, ignore
+    if (shutdown_requested_ || level_index >= levels_.size()) {
+        return;
+    }
+
+    bool needs_compaction = levels_[level_index]->needsCompaction();
+
+    if (needs_compaction) {
+        // only compact if not last level
+        // check last level here instead of in compactLevel
+        if (level_index < levels_.size() - 1) {
+            {
+                std::lock_guard lock(compaction_mutex_);
+                compaction_tasks_.push(level_index);
+            }
+            // notify the compaction thread to do the compaction
+            compaction_task_cv_.notify_one();
+        }
+    }
+}
+
+// compact the given level that needs compaction
+void LSMTree::compactLevelHelper(size_t level_index) {
+    size_t next_level_index = level_index + 1;
+    std::vector<std::shared_ptr<SSTable>> input_tables_level;
+    std::vector<std::shared_ptr<SSTable>> input_tables_level_next;
+
+    // Select ALL tables from the current level (tier) for compaction
+    // getSSTables locks level_mutex_
+    {
+        input_tables_level = levels_[level_index]->getSSTables();
+    }
+    if (input_tables_level.empty()) {
+        std::cerr << "[LSMTree Compaction ERROR] No tables in current level " << level_index << " to compact." << std::endl;
+        return;
+    }
+
+    // Perform merge logic - mergeSSTables now takes an empty input_tables_level_next
+    std::vector<std::shared_ptr<SSTable>> output_tables;
+    try {
+        for (auto& table : input_tables_level) {
+            if (!table->data_loaded_) {
+                if (!table->loadFromDisk()) {
+                    std::cerr << "Error loading input table " << table->file_path_ << " for merge." << std::endl;
+                    throw std::runtime_error("Failed to load input SSTable for merge");
+                }
+            }
+        }
+        // mergeSSTables doesn't lock levels_ since it copies the data when merging them
+        output_tables = mergeSSTables(input_tables_level,
+                                      input_tables_level_next,
+                                      next_level_index);
+    } catch (const std::exception& e) {
+        std::cerr << "Error during tiered SSTable merge: " << e.what() << std::endl;
+
+        // clean up partially created files
+        for (const auto& failed_output : output_tables) {
+            deleteSSTableFile(failed_output);
+        }
+        return;
+    }
+
+    // 3. atomic replace in memory: protected by compaction_mutex_
+    // removeAllSSTables locks level_mutex_
+    // exclusive locks on levels motified
+    levels_[level_index]->removeAllSSTables(input_tables_level);
+
+    for (const auto& table : output_tables) {
+        levels_[next_level_index]->addSSTable(table);
+    }
+
+    // TODO: updateHistory
+
+    // delete the old SSTable files that were merged from the current level
+    for (const auto& table : input_tables_level) {
+        deleteSSTableFile(table);
+    }
+
+    // after compacted this level, compact the next if needed
+    checkCompaction(next_level_index);
 }

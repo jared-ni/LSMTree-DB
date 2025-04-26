@@ -345,15 +345,24 @@ void test_lsm_tree() {
 
     std::cout << "346" << std::endl;
 
+    // wait 2 seconds to test buffer flush
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
     assert(lsm_tree.buffer_->cur_size_ == 0);
+
+    std::cout << "353" << std::endl;
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     assert(lsm_tree.levels_[0]->cur_table_count_ == 1);
 
     lsm_tree.putData({3, 300}); // {3}
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     assert(lsm_tree.buffer_->cur_size_ == 1);
     lsm_tree.putData({4, 400}); // {}, l0 has 0 tables, l1 has 1 table
 
     std::cout << "355" << std::endl;
 
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     assert(lsm_tree.buffer_->cur_size_ == 0); 
     assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
     assert(lsm_tree.levels_[1]->cur_table_count_ == 1);
@@ -361,16 +370,18 @@ void test_lsm_tree() {
     lsm_tree.putData({5, 500}); // {5}
     lsm_tree.putData({6, 600}); // {}, l0 has 1 table, l1 has 2 tables
 
-    std::cout << "364" << std::endl;
+    std::cout << "373" << std::endl;
 
     lsm_tree.putData({7, 700}); // {7}
 
-    std::cout << "368" << std::endl;
+    std::cout << "378" << std::endl;
     
     lsm_tree.putData({8, 800}); // {}, l0 has 0 tables, l1 has 0 tables, l2 has 1 table
     // TODO: flushing from l1 to l2 has a deadlock issue? 
 
-    std::cout << "369" << std::endl;
+    std::cout << "383" << std::endl;
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     assert(lsm_tree.levels_[0]->cur_table_count_ == 0);
     assert(lsm_tree.levels_[1]->cur_table_count_ == 0);

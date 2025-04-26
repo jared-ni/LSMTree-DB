@@ -131,7 +131,12 @@ and have one bloom filter per level instead.
 - reads: search async on each level. 
 - writes: 
     - flushing in a background thread
-    - 
+    - compact in a background thread
 
     splitting across data: each thread is searching a level
     splitting across query: client with 100 queries, 10 threads that do 10 queries / thread
+
+4/25:
+- writes: 
+    - finally done compaction and flush in their own background thread
+    

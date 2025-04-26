@@ -7,6 +7,8 @@
 #include <map>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
+#include <queue>
 // persistence
 #include <filesystem>
 #include <sstream>
@@ -189,6 +191,8 @@ class LSMTree {
             size_t base_level_table_capacity = BASE_LEVEL_TABLE_CAPACITY, 
             size_t total_levels = MAX_LEVELS, 
             size_t level_size_ratio = LEVEL_SIZE_RATIO);
+    ~LSMTree();
+    void shutdown();
 
     // directory with levels that are folders
     std::string db_path_;
@@ -207,19 +211,31 @@ class LSMTree {
 
     // LSMTree-level locks are for coordinating structural changes
     // the put/get/delete are handled by Buffer/Level/SSTable locks
+    std::atomic<bool> shutdown_requested_{false};
 
-    // flush_mutex_: one buffer flush at a time
-    std::mutex buffer_flush_mutex_;
-    std::mutex compaction_muteux_;
-    // compaction_mutex_: one compaction at a time, since it modifies multiple levels
+    // -- make flush multithreaded --
+    std::mutex flush_mutex_;
+    std::condition_variable flush_request_cv_;
+    bool flush_needed_{false};
+    // automatic joining using jthread
+    std::thread flusher_thread_;
 
-
-    // for testing
-    std::vector<LevelSnapshot> getLevelsSnapshot() const;
-
-    // buffer methods
+    // flush logic ran by flusher thread
+    void flushBufferHelper();
+    void flushThreadLoop();
     void flushBuffer();
-    
+
+    // -- compaction multithreaded --
+    std::mutex compaction_mutex_;
+    std::condition_variable compaction_task_cv_;
+    // queue of level indices that need compaction
+    std::queue<size_t> compaction_tasks_;
+    std::thread compactor_thread_;
+
+    void compactThreadLoop();
+    void compactLevelHelper(size_t level_index);
+    void doCompactionCheck(size_t level_index);
+
     // compaction logic
     bool checkCompaction(size_t level_index);
     void compactLevel(size_t level_index);
@@ -235,10 +251,6 @@ class LSMTree {
     void rangeData(long low, long high);
     bool deleteData(long key);
 
-    // protects all flush: only one thread can flush at a time
-    std::mutex flush_mutex_;
-    std::mutex compaction_mutex_;
-
     // set up DB directory and history
     void setupDB();
     void loadHistory();
@@ -251,6 +263,9 @@ class LSMTree {
     std::string getBloomFilterPath(int level_num, int file_id) const;
     // delete physical file of an SSTable
     void deleteSSTableFile(const std::shared_ptr<SSTable>& sstable);
+
+    // for testing
+    std::vector<LevelSnapshot> getLevelsSnapshot() const;
 };
 
 struct MergeEntry {
