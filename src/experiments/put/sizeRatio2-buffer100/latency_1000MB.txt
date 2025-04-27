@@ -1,0 +1,41 @@
+Loading workload from: ./experiments/put/1000MB_put.txt
+[LSMTree] Created Level 0 with table capacity: 2 (buffer capacity: 100)
+[LSMTree] Created Level 1 with table capacity: 4 (buffer capacity: 100)
+[LSMTree] Created Level 2 with table capacity: 8 (buffer capacity: 100)
+[LSMTree] Created Level 3 with table capacity: 16 (buffer capacity: 100)
+[LSMTree] Created Level 4 with table capacity: 32 (buffer capacity: 100)
+[LSMTree] Created Level 5 with table capacity: 64 (buffer capacity: 100)
+[LSMTree] Created Level 6 with table capacity: 128 (buffer capacity: 100)
+[LSMTree] Created Level 7 with table capacity: 256 (buffer capacity: 100)
+[LSMTree] Created Level 8 with table capacity: 512 (buffer capacity: 100)
+[LSMTree] Created Level 9 with table capacity: 1024 (buffer capacity: 100)
+Total time to get 10MB data points from workload: 376 seconds
+
+real	6m16.782s
+user	2m31.302s
+sys	3m21.997s
+Loading workload from: ./experiments/put/1000MB_put.txt
+[LSMTree] Created Level 0 with table capacity: 2 (buffer capacity: 100)
+[LSMTree] Created Level 1 with table capacity: 4 (buffer capacity: 100)
+[LSMTree] Created Level 2 with table capacity: 8 (buffer capacity: 100)
+[LSMTree] Created Level 3 with table capacity: 16 (buffer capacity: 100)
+[LSMTree] Created Level 4 with table capacity: 32 (buffer capacity: 100)
+[LSMTree] Created Level 5 with table capacity: 64 (buffer capacity: 100)
+[LSMTree] Created Level 6 with table capacity: 128 (buffer capacity: 100)
+[LSMTree] Created Level 7 with table capacity: 256 (buffer capacity: 100)
+[LSMTree] Created Level 8 with table capacity: 512 (buffer capacity: 100)
+[LSMTree] Created Level 9 with table capacity: 1024 (buffer capacity: 100)
+[Flusher Thread] Started.
+[LSMTree] Started 1 flusher and  1 compactor thread.
+[Compactor Thread 0x16db87000] Started.
+Total time to get 10MB data points from workload: 115 seconds
+[LSMTree] Shutdown requested. Waiting for threads to finish...
+[Flusher Thread] Exiting.
+[LSMTree] Flusher thread joined.
+[Compactor Thread 0x16db87000] Exiting.
+[LSMTree] Compactor thread joined.
+[LSMTree] Shutdown complete.
+
+real	2m9.827s
+user	4m47.156s
+sys	0m49.096s
