@@ -51,11 +51,11 @@ char* execute_DbOperator(DbOperator* query) {
              return strdup("[SERVER] Error: PUT requires 2 arguments (key, value).");
         }
        
-        long long key = query->args[0];
-        long long value = query->args[1];
+        int key = query->args[0];
+        int value = query->args[1];
 
         // Ensure compatibility if LSMTree uses 'long' and args are 'long long'
-        DataPair data_to_put(static_cast<long>(key), static_cast<long>(value), false);
+        DataPair data_to_put(static_cast<int>(key), static_cast<int>(value), false);
 
         if (lsm_tree_ptr->putData(data_to_put)) {
             return strdup("[SERVER] PUT successful.");
@@ -67,8 +67,8 @@ char* execute_DbOperator(DbOperator* query) {
         if (num_args != 1) {
              return strdup("[SERVER] Error: GET requires 1 argument (key).");
         }
-        long long key_ll = query->args[0]; // Access directly
-        long key = static_cast<long>(key_ll); // Cast for LSMTree::getData
+        int key_ll = query->args[0]; // Access directly
+        int key = static_cast<int>(key_ll); // Cast for LSMTree::getData
 
         std::optional<DataPair> result = lsm_tree_ptr->getData(key);
 
@@ -101,8 +101,8 @@ char* execute_DbOperator(DbOperator* query) {
         if (num_args != 1) {
              return strdup("[SERVER] Error: DELETE requires 1 argument (key).");
         }
-        long long key_ll = query->args[0];
-        long key = static_cast<long>(key_ll);
+        int key_ll = query->args[0];
+        int key = static_cast<int>(key_ll);
 
         if (lsm_tree_ptr->deleteData(key)) {
              char buffer[100];

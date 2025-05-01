@@ -1,8 +1,12 @@
 # every DataPair is 24 bytes, so approximately 43690 DataPairs fit in 1 MB
 
-# I want to do 1 MB, 10 MB, 100 MB, 500 MB. 
+# I want to do 1 MB, 10 MB, 100 MB, 500 MB, 1GB, 10GB
 
-# 43690, # 436,900, # 4,369,000, # 21,845,000, 43,690,000 DataPairs each
+# 41666667: long
+# 87380000: int
+
+# long: 43690, # 436,900, # 4,369,000, # 21,845,000, 43,690,000 DataPairs each
+# int : 87380, # 873,800, # 8,738,000, # 43,690,000, 87,380,000 DataPairs each
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "[BENCHMARK] put script in directory: $script_dir"

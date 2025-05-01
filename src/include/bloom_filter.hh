@@ -30,11 +30,11 @@ class BloomFilter {
                 const std::vector<unsigned char>& bit_storage_val, 
                 double original_fp_rate = DEFAULT_FALSE_POSITIVE_RATE);
 
-    void add(long key);
-    bool might_contain(long key) const;
+    void add(int key);
+    bool might_contain(int key) const;
 
     // generate k hashes for an input key
-    std::vector<size_t> generate_k_hashes(long key) const;
+    std::vector<size_t> generate_k_hashes(int key) const;
 };
 
 #endif

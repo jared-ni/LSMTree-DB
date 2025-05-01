@@ -67,8 +67,8 @@ void test_sstable() {
     try {
         SSTable empty_table(empty_data, 1, empty_table_path, empty_bf_path);
         assert(empty_table.size_ == 0);
-        assert(empty_table.min_key_ == std::numeric_limits<long>::max());
-        assert(empty_table.max_key_ == std::numeric_limits<long>::min());
+        assert(empty_table.min_key_ == std::numeric_limits<int>::max());
+        assert(empty_table.max_key_ == std::numeric_limits<int>::min());
         assert(!empty_table.keyInRange(10));
         // getDataPair is non-const now because of potential loadFromDisk
         assert(!empty_table.getDataPair(10).has_value());

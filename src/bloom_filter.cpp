@@ -73,7 +73,7 @@ bool BloomFilter::get_bit(size_t bit_index) const {
 
 // for every value, we can generate the k hashes for it
 // must be consistent every time
-std::vector<size_t> BloomFilter::generate_k_hashes(long key) const {
+std::vector<size_t> BloomFilter::generate_k_hashes(int key) const {
     std::vector<size_t> hashes(num_hashes_);
     
     std::hash<long> hasher;
@@ -87,7 +87,7 @@ std::vector<size_t> BloomFilter::generate_k_hashes(long key) const {
 }
 
 // add a key to bloom filter, by setting its bits to true
-void BloomFilter::add(long key) {
+void BloomFilter::add(int key) {
     std::vector<size_t> hash_vals = generate_k_hashes(key);
     for (size_t hv : hash_vals) {
         // bits_[hv] = true;
@@ -96,7 +96,7 @@ void BloomFilter::add(long key) {
 }
 
 // if any of the bits is false, then the key is definitely not in the filter
-bool BloomFilter::might_contain(long key) const {
+bool BloomFilter::might_contain(int key) const {
     std::vector<size_t> hash_vals = generate_k_hashes(key);
     for (size_t hv : hash_vals) {
         if (!get_bit(hv)) {

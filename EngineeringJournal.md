@@ -139,4 +139,16 @@ and have one bloom filter per level instead.
 4/25:
 - writes: 
     - finally done compaction and flush in their own background thread
-    
+
+4/28:
+- writes observation: 
+    - multi-threaded compaction completedly rids the 
+    lower levels of any data. This is because data
+    build up at the lower levels due to background thread,
+    and when it finally flushes, it flushes all tables,
+    and it sends all of them to the next level.
+    - this repeats, and eventually all are flushed. 
+
+5/1:
+- changed long to int to normalize the testings
+- reached 100k write / second, 2k read / second

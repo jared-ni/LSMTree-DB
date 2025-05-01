@@ -28,23 +28,23 @@
 #define MAX_TABLE_SIZE 1000000
 #define FENCE_PTR_BLOCK_SIZE 170 // 4096 / 24 = 170 bytes
 
-// DataPair is 24 bytes
+// DataPair is 24 bytes if long, 12 bytes if ints
+// 10MB = 10485760 Bytes = 436,907 DataPairs
 class DataPair {
     public:
-    DataPair(long key, long value, bool deleted = false);
-    long key_;
-    long value_;
+    DataPair(int key, int value, bool deleted = false);
+    int key_;
+    int value_;
     // tombstone to mark deleted keys
     bool deleted_;
 
-    bool operator<(long other_key) const;
+    bool operator<(int other_key) const;
     bool operator<(const DataPair& other) const;
     bool operator==(const DataPair& other) const;
 };
 
 struct fence_ptr {
-    long min_key;
-    // long max_key;
+    int min_key;
     // where the block starts in the file
     // size_t file_offset; 
     size_t data_offset;
@@ -54,8 +54,8 @@ struct fence_ptr {
 // snapshots of the states
 struct SSTableSnapshot {
     int level_num;
-    long min_key;
-    long max_key;
+    int min_key;
+    int max_key;
     size_t size;
     std::vector<DataPair> table_data;
 
@@ -85,8 +85,8 @@ class SSTable {
 
     int level_num_;
 
-    long min_key_;
-    long max_key_;
+    int min_key_;
+    int max_key_;
     size_t size_;
 
     // TODO: bloom filter
@@ -106,7 +106,7 @@ class SSTable {
     // TODO: synchronization: add a mutex to protect lazy loading in loadFromDisk
     mutable std::mutex sstable_mutex_;
 
-    std::optional<std::pair<size_t, size_t>> getFenceRange(long key) const;
+    std::optional<std::pair<size_t, size_t>> getFenceRange(int key) const;
 
     bool writeToDisk() const;
     bool loadFromDisk();
@@ -115,9 +115,9 @@ class SSTable {
     void printSSTable() const;
 
     // check if Key is in range of SSTable
-    bool keyInRange(long key) const;
-    bool keyInSSTable(long key);
-    std::optional<DataPair> getDataPair(long key);
+    bool keyInRange(int key) const;
+    bool keyInSSTable(int key);
+    std::optional<DataPair> getDataPair(int key);
 
 };
 
@@ -178,7 +178,7 @@ class Buffer {
     std::shared_ptr<SSTable> flushBuffer();
     // API: put, get, range, delete
     bool putData(const DataPair& data);
-    std::optional<DataPair> getData(long key) const;
+    std::optional<DataPair> getData(int key) const;
     // std::vector<DataPair> getRangeData(long start, long end) const;
     // bool deleteData(long key);
 };
@@ -247,9 +247,9 @@ class LSMTree {
 
     // API: put, get, range, delete
     bool putData(const DataPair& data);
-    std::optional<DataPair> getData(long key);
-    void rangeData(long low, long high);
-    bool deleteData(long key);
+    std::optional<DataPair> getData(int key);
+    void rangeData(int low, int high);
+    bool deleteData(int key);
 
     // set up DB directory and history
     void setupDB();

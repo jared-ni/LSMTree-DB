@@ -17,13 +17,13 @@ inline std::string generateSSTableFilename(uint64_t file_id) {
  * DataPair methods
  */
 
-DataPair::DataPair(long key, long value, bool deleted) {
+DataPair::DataPair(int key, int value, bool deleted) {
     this->key_ = key;
     this->value_ = value;
     this->deleted_ = deleted;
 }
 
-bool DataPair::operator<(long other_key) const {
+bool DataPair::operator<(int other_key) const {
     return key_ < other_key;
 }
 
@@ -53,8 +53,8 @@ SSTable::SSTable(const std::vector<DataPair>& data, int level_num,
     // set min and max key
     if (data.empty()) {
         size_ = 0;
-        min_key_ = std::numeric_limits<long>::max();
-        max_key_ = std::numeric_limits<long>::min();
+        min_key_ = std::numeric_limits<int>::max();
+        max_key_ = std::numeric_limits<int>::min();
     } else {
         // this assumes data MUST BE sorted
         size_ = data.size();
@@ -101,8 +101,8 @@ SSTable::SSTable(int level_num, const std::string& file_path,
     this->bf_file_path_ = bf_file_path;
     this->size_ = 0;
     this->data_loaded_ = false;
-    this->min_key_ = std::numeric_limits<long>::max();
-    this->max_key_ = std::numeric_limits<long>::min();
+    this->min_key_ = std::numeric_limits<int>::max();
+    this->max_key_ = std::numeric_limits<int>::min();
 
     // TODO: Bloom filter: setting and loading eagerly
 
@@ -221,7 +221,7 @@ bool SSTable::loadFromDisk() {
     // clean slate
     table_data_.clear();
     std::string line;
-    long key, value;
+    int key, value;
     int deleted_int;
     char colon1, colon2;
     int line_num = 0;
@@ -265,8 +265,8 @@ bool SSTable::loadFromDisk() {
     if (table_data_.empty()) {
         // std::cout << "[SSTable] warning: Loaded empty table data from " << file_path_ << std::endl;
         size_ = 0;
-        min_key_ = std::numeric_limits<long>::max();
-        max_key_ = std::numeric_limits<long>::min();
+        min_key_ = std::numeric_limits<int>::max();
+        max_key_ = std::numeric_limits<int>::min();
     } else {
         size_ = table_data_.size();
         min_key_ = table_data_.front().key_;
@@ -331,7 +331,7 @@ void SSTableSnapshot::printSSTable() const {
 // return [start_index, end_index_exclusive) in table_data
 // returns nullopt if key outside fence pointer ranges
 // min/max already checked in SSTable before calling this function
-std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(long key) const {
+std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(int key) const {
     if (this->size_ == 0) {
         return std::nullopt;
     }
@@ -346,7 +346,7 @@ std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(long key) const 
     // binary search on fence pointers to find the block
     // return first time key < fp.min_key is false, 
     auto it = std::upper_bound(fence_pointers_.begin(), fence_pointers_.end(), key,
-        [](long key, const fence_ptr& fp) {
+        [](int key, const fence_ptr& fp) {
             return key < fp.min_key;
         });
     
@@ -363,7 +363,7 @@ std::optional<std::pair<size_t, size_t>> SSTable::getFenceRange(long key) const 
 }
 
 // assume the data must be within the current SSTable range, having checked bloom filter
-std::optional<DataPair> SSTable::getDataPair(long key) {
+std::optional<DataPair> SSTable::getDataPair(int key) {
     // persistence check: if data not loaded, load from disk
     if (!data_loaded_) {
         // TODO: lock before checking data and loading
@@ -403,7 +403,7 @@ std::optional<DataPair> SSTable::getDataPair(long key) {
 
     // TODO: replace with binary search
     auto it = std::lower_bound(block_begin_it, block_end_it, key,
-                                [](const DataPair& dataPair, long key) {
+                                [](const DataPair& dataPair, int key) {
                                     return dataPair.key_ < key;
                                 });
     // auto it = std::lower_bound(block_begin_it, block_end_it, key);
@@ -415,11 +415,11 @@ std::optional<DataPair> SSTable::getDataPair(long key) {
     return std::nullopt;
 }
 
-bool SSTable::keyInRange(long key) const {
+bool SSTable::keyInRange(int key) const {
     return key >= min_key_ && key <= max_key_;
 }
 
-bool SSTable::keyInSSTable(long key) {
+bool SSTable::keyInSSTable(int key) {
     if (!keyInRange(key)) { return false; }
 
     if (!data_loaded_) {
@@ -606,7 +606,7 @@ bool Buffer::putData(const DataPair& data) {
 }
 
 // get data from buffer, shared mutex
-std::optional<DataPair> Buffer::getData(long key) const {
+std::optional<DataPair> Buffer::getData(int key) const {
     // lock the get operation in the buffer
     std::shared_lock<std::shared_mutex> lock(this->buffer_mutex_);
 
@@ -1059,7 +1059,7 @@ bool LSMTree::putData(const DataPair& data) {
     return rt;
 }
 
-std::optional<DataPair> LSMTree::getData(long key) {
+std::optional<DataPair> LSMTree::getData(int key) {
     // in case shut down thread
     if (shutdown_requested_) return std::nullopt;
 
@@ -1108,7 +1108,7 @@ std::optional<DataPair> LSMTree::getData(long key) {
 }
 
 // TODO: need to implement still
-void LSMTree::rangeData(long low, long high) {
+void LSMTree::rangeData(int low, int high) {
     if (shutdown_requested_) return;
 
     for (int i = low; i < high; i++) {
@@ -1122,7 +1122,7 @@ void LSMTree::rangeData(long low, long high) {
 }
 
 // delete is just putting in the tombstone in the buffer for now
-bool LSMTree::deleteData(long key) {
+bool LSMTree::deleteData(int key) {
     // mark data in buffer as tombstone, if found
     DataPair tombstone_data(key, 0, true);
     
@@ -1287,7 +1287,7 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
         }
     }
 
-    long last_key = std::numeric_limits<long>::min();
+    int last_key = std::numeric_limits<int>::min();
     bool first_entry = true;
 
     // K-way merge using the heap
@@ -1495,6 +1495,9 @@ void LSMTree::doCompactionCheck(size_t level_index) {
 
 // compact the given level that needs compaction
 void LSMTree::compactLevelHelper(size_t level_index) {
+    if (!levels_[level_index]->needsCompaction()) {
+        return;
+    }
     size_t next_level_index = level_index + 1;
     std::vector<std::shared_ptr<SSTable>> input_tables_level;
     std::vector<std::shared_ptr<SSTable>> input_tables_level_next;
