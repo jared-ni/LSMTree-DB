@@ -1173,6 +1173,7 @@ bool LSMTree::checkCompaction(size_t level_index) {
     return false;
 }
 
+
 // basic tiering
 // this is the first call to compactLevel, which has the global compaction_lock
 // subsequent recursive calls don't have the lock
@@ -1395,7 +1396,8 @@ void LSMTree::compactThreadLoop() {
             // spurious wake-up check
             // take the front of the tasks, FIFO style
             if (!compaction_tasks_.empty()) {
-                level_to_compact = compaction_tasks_.front();
+                // level_to_compact = compaction_tasks_.front();
+                level_to_compact = compaction_tasks_.top();
                 compaction_tasks_.pop();
             }
         }
@@ -1404,17 +1406,16 @@ void LSMTree::compactThreadLoop() {
         if (level_to_compact != -1 && level_to_compact < levels_.size() - 1) {
             try {
                 // compact current level, and check the next one right after
+                // includes doCompactionCheck for level_to_compact + 1
                 compactLevelHelper(level_to_compact);
-                // do compaction check for next level
-                doCompactionCheck(level_to_compact + 1);
             } catch (const std::exception& e) {
                 std::cerr << "[Compactor Thread " << std::this_thread::get_id() 
                           << "] Exception during compaction of level "
                           << level_to_compact << ": " << e.what() << std::endl;
             }
         }
-        // the last level is not compacted, so do nothing lol
-        if (shutdown_requested_.load()) {
+        // only shut down if no more compaction tasks
+        if (shutdown_requested_.load() && compaction_tasks_.empty()) {
             std::cout << "[Compactor Thread " << std::this_thread::get_id() << "] Exiting." << std::endl;
             break;
         }
@@ -1554,5 +1555,5 @@ void LSMTree::compactLevelHelper(size_t level_index) {
     }
 
     // after compacted this level, compact the next if needed
-    checkCompaction(next_level_index);
+    doCompactionCheck(next_level_index);
 }

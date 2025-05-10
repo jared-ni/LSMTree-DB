@@ -229,7 +229,10 @@ class LSMTree {
     std::mutex compaction_mutex_;
     std::condition_variable compaction_task_cv_;
     // queue of level indices that need compaction
-    std::queue<size_t> compaction_tasks_;
+    // std::queue<size_t> compaction_tasks_;
+    // min-heap in c++, so we can pop the smallest level index first
+    std::priority_queue<size_t, std::vector<size_t>, 
+                        std::greater<size_t>> compaction_tasks_;
     std::thread compactor_thread_;
 
     void compactThreadLoop();
@@ -281,6 +284,5 @@ struct MergeEntry {
         return source_level_num > other.source_level_num;
     }
 };
-
 
 #endif
