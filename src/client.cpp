@@ -23,6 +23,7 @@ machine please look into this as a a source of error. */
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <errno.h>
 
 #include "message.h"
 #include "utils.h"
@@ -86,7 +87,7 @@ int main(void)
     const char *output_str = NULL;
     int len = 0;
 
-    // Continuously loop and wait for input. At each iteration:
+    // loop and wait for:
     // 1. output interactive marker
     // 2. read from stdin until eof.
     char read_buffer[DEFAULT_STDIN_BUFFER_SIZE];
@@ -101,44 +102,70 @@ int main(void)
         }
 
         // Only process input that is greater than 1 character.
-        // Convert to message and send the message and the
+        // convert to message and send the message and the
         // payload directly to the server.
         send_message.length = strlen(read_buffer);
         if (send_message.length > 1) {
-            // Send the message_header, which tells server payload size
+            // send the message_header, which tells server payload size
             if (send(client_socket, &(send_message), sizeof(message), 0) == -1) {
                 log_err("Failed to send message header.");
                 exit(1);
             }
 
-            // Send the payload (query) to server
+            // send the payload (query) to server
             if (send(client_socket, send_message.payload, send_message.length, 0) == -1) {
                 log_err("Failed to send query payload.");
                 exit(1);
             }
 
-            // Always wait for server response (even if it is just an OK message)
-            if ((len = recv(client_socket, &(recv_message), sizeof(message), 0)) > 0) {
-                if ((recv_message.status == OK_WAIT_FOR_RESPONSE || recv_message.status == OK_DONE) &&
-                    (int) recv_message.length > 0) {
-                    // Calculate number of bytes in response package
-                    int num_bytes = (int) recv_message.length;
-                    char payload[num_bytes + 1];
+            // always wait for server response
+            ssize_t header_len_recv;
+            if ((header_len_recv = recv(client_socket, &recv_message, sizeof(message), 0)) > 0) {
 
-                    // Receive the payload and print it out
-                    if ((len = recv(client_socket, payload, num_bytes, 0)) > 0) {
-                        payload[num_bytes] = '\0';
-                        printf("%s\n", payload);
+                // received the header
+                if (recv_message.length < 0) {
+                    log_err("Client: Received header with invalid length: %d\n", recv_message.length);
+                    exit(1); // Or break, then exit outside loop
+                }
+
+                char* server_payload_buffer = NULL;
+                if (recv_message.length > 0) {
+                    // Allocate buffer for the payload
+                    server_payload_buffer = (char*)malloc(recv_message.length + 1);
+                    if (!server_payload_buffer) {
+                        log_err("Client: Failed to allocate memory for server payload.\n");
+                        exit(1);
+                    }
+
+                    // Receive the payload from the server
+                    ssize_t payload_bytes_actual = recv(client_socket, server_payload_buffer, recv_message.length, MSG_WAITALL);
+                    
+                    if (payload_bytes_actual > 0) {
+                        if (payload_bytes_actual != recv_message.length) {
+                             log_err("Client: Incomplete payload. Expected %d, Got %zd\n", recv_message.length, payload_bytes_actual);
+                             free(server_payload_buffer);
+                             exit(1);
+                        }
+                        server_payload_buffer[recv_message.length] = '\0';
+                        printf("%s\n", server_payload_buffer);
+                    } else if (payload_bytes_actual == 0) {
+                        log_info("Client: Server closed connection while expecting payload.\n");
+                    } else {
+                        log_err("Client: Failed to receive payload: %s\n", strerror(errno)); // Need #include <errno.h>
+                        // No payload to print
+                    }
+                    free(server_payload_buffer);
+                } else {
+                    if (recv_message.status == OK_WAIT_FOR_RESPONSE || recv_message.status == OK_DONE) {
+                         printf("\n");
                     }
                 }
-            }
-            else {
-                if (len < 0) {
-                    log_err("Failed to receive message.");
+            } else {
+                if (header_len_recv < 0) {
+                    log_err("Client: Failed to receive message header: %s\n", strerror(errno)); // Need #include <errno.h>
+                } else {
+                    log_info("-- Server closed connection\n");
                 }
-                else {
-		            log_info("-- Server closed connection\n");
-		        }
                 exit(1);
             }
         }

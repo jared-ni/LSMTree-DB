@@ -152,3 +152,8 @@ and have one bloom filter per level instead.
 5/1:
 - changed long to int to normalize the testings
 - reached 100k write / second, 2k read / second
+
+5/7:
+- need to write multi-thread for reads as well. 
+    - search async on each level in getData()
+    - parallelize range gets()

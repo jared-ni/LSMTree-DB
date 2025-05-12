@@ -67,15 +67,14 @@ char* execute_DbOperator(DbOperator* query) {
         if (num_args != 1) {
              return strdup("[SERVER] Error: GET requires 1 argument (key).");
         }
-        int key_ll = query->args[0]; // Access directly
-        int key = static_cast<int>(key_ll); // Cast for LSMTree::getData
+        int key = query->args[0];
 
         std::optional<DataPair> result = lsm_tree_ptr->getData(key);
 
         if (result.has_value()) {
             char buffer[64];
             // Use the values from the result DataPair (which are 'long')
-            int len = snprintf(buffer, sizeof(buffer), "%ld:%ld", result.value().key_, result.value().value_);
+            int len = snprintf(buffer, sizeof(buffer), "%d:%d", result.value().key_, result.value().value_);
             if (len < 0 || len >= sizeof(buffer)) {
                 return strdup("[SERVER] Error: Failed to format GET result.");
             }
@@ -83,7 +82,7 @@ char* execute_DbOperator(DbOperator* query) {
         } else {
              char buffer[100];
              // Use the original key requested for the not found message
-             snprintf(buffer, sizeof(buffer), "[SERVER] Key %lld not found.", key_ll);
+             snprintf(buffer, sizeof(buffer), "[SERVER] Key %d not found.", key);
             return strdup(buffer);
         }
 
@@ -92,10 +91,31 @@ char* execute_DbOperator(DbOperator* query) {
         if (num_args != 2) {    // Check using num_args field
             return strdup("[SERVER] Error: RANGE requires 2 arguments (start_key, end_key).");
         }
-        // long long start_key_ll = query->args[0];
-        // long long end_key_ll = query->args[1];
-        std::cout << "range " << std::endl;
-        return strdup("[SERVER] RANGE query not fully implemented.");
+        int start_key = query->args[0];
+        int end_key = query->args[1];
+
+        if (end_key < start_key) {
+            return strdup("[SERVER] Error: RANGE end_key must be greater than or equal to start_key.");
+        }
+
+        std::vector<DataPair> results = lsm_tree_ptr->rangeData(start_key, end_key);
+
+        if (results.empty()) {
+            return strdup("");
+        } else {
+            std::string result_str;
+            for (size_t i = 0; i < results.size(); ++i) {
+                // Append key:value
+                result_str += std::to_string(results[i].key_);
+                result_str += ":";
+                result_str += std::to_string(results[i].value_);
+                if (i < results.size() - 1) {
+                    result_str += " ";
+                }
+            }
+            // strdup creates a C-style string copy on the heap
+            return strdup(result_str.c_str());
+        }
 
     } else if (query->type == DELETE) {
         if (num_args != 1) {
@@ -106,7 +126,7 @@ char* execute_DbOperator(DbOperator* query) {
 
         if (lsm_tree_ptr->deleteData(key)) {
              char buffer[100];
-             snprintf(buffer, sizeof(buffer), "[SERVER] DELETE requested for key %lld.", key_ll);
+             snprintf(buffer, sizeof(buffer), "[SERVER] DELETE requested for key %d.", key_ll);
             return strdup(buffer);
         } else {
             return strdup("[SERVER] Error: DELETE operation failed internally.");
