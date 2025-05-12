@@ -409,7 +409,6 @@ std::optional<DataPair> SSTable::getDataPair(int key) {
     // auto it = std::lower_bound(block_begin_it, block_end_it, key);
     if (it != block_end_it && it->key_ == key) {
         // always return, even if tombstone/deleted, so we can check in the return
-        // and avoid keyInSSTable() check
         return *it;
     }
     return std::nullopt;
@@ -417,21 +416,6 @@ std::optional<DataPair> SSTable::getDataPair(int key) {
 
 bool SSTable::keyInRange(int key) const {
     return key >= min_key_ && key <= max_key_;
-}
-
-bool SSTable::keyInSSTable(int key) {
-    if (!keyInRange(key)) { return false; }
-
-    if (!data_loaded_) {
-        if (!loadFromDisk()) {
-        std::cerr << "can't load SSTable " << file_path_ << std::endl;
-            return false;
-        }
-    }
-    // Perform binary search
-    // TODO: use fence pointers
-    auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
-    return (it != table_data_.end() && it->key_ == key);
 }
 
 /**
@@ -1032,9 +1016,9 @@ void LSMTree::flushBuffer() {
 }
 
 bool LSMTree::putData(const DataPair& data) {
-    if (shutdown_requested_) {
-        return false;
-    }
+    // if (shutdown_requested_) {
+    //     return false;
+    // }
     bool rt = buffer_->putData(data);
     // if level is full, flush. put data in buffer either way
 
@@ -1061,7 +1045,7 @@ bool LSMTree::putData(const DataPair& data) {
 
 std::optional<DataPair> LSMTree::getData(int key) {
     // in case shut down thread
-    if (shutdown_requested_) return std::nullopt;
+    // if (shutdown_requested_) return std::nullopt;
 
     // search buffer first
     // getData locks buffer_mutex_
@@ -1078,9 +1062,16 @@ std::optional<DataPair> LSMTree::getData(int key) {
 
     for (size_t level_i = 0; level_i < levels_.size(); level_i++) {
         const auto& cur_level = levels_[level_i];
-        // skip level if bloom filter says key not in level
+
+        // TODO: skip level if bloom filter says key not in level
         // getSSTables locks level_mutex_
-        const auto& cur_sstables = cur_level->getSSTables();
+        std::vector<std::shared_ptr<SSTable>> cur_sstables;
+        {
+            std::shared_lock lock(cur_level->level_mutex_);
+            cur_sstables = cur_level->sstables_;
+        }
+        // newer table priority, so we process the new/last tables first
+        std::reverse(cur_sstables.begin(), cur_sstables.end());
 
         for (const auto& cur_sstable : cur_sstables) {
             // check range: if not in range, continue
@@ -1088,7 +1079,7 @@ std::optional<DataPair> LSMTree::getData(int key) {
                 continue;
             }
 
-            // TODO: check bloom filter
+            // check bloom filter
             if (!cur_sstable->bloom_filter_.might_contain(key)) {
                 continue;
             }
@@ -1108,17 +1099,91 @@ std::optional<DataPair> LSMTree::getData(int key) {
 }
 
 // TODO: need to implement still
-void LSMTree::rangeData(int low, int high) {
-    if (shutdown_requested_) return;
+std::vector<DataPair> LSMTree::rangeData(int low, int high) {
+    // if (shutdown_requested_) return std::vector<DataPair>();
+    // for (int i = low; i < high; i++) {
+    //     std::optional<DataPair> data_pair = getData(i);
+    //     if (data_pair.has_value()) {
+    //         // std::cout << i << ":" << data_pair.value().value_ << std::endl;
+    //     } else {
+    //         // std::cout << std::endl;
+    //     }
+    // }
+    std::vector<DataPair> final_results;
+    std::map<int, DataPair> results_map;
 
-    for (int i = low; i < high; i++) {
-        std::optional<DataPair> data_pair = getData(i);
-        if (data_pair.has_value()) {
-            // std::cout << i << ":" << data_pair.value().value_ << std::endl;
-        } else {
-            // std::cout << std::endl;
+    // scan the buffer
+    {
+        std::shared_lock<std::shared_mutex> lock(buffer_->buffer_mutex_);
+        auto it_low = std::lower_bound(buffer_->buffer_data_.begin(), 
+                                       buffer_->buffer_data_.end(), low);
+        for (auto it = it_low; it != buffer_->buffer_data_.end() && it->key_ < high; ++it) {
+            // add to results_map
+            // only add if doesn't exist already
+            results_map.emplace(it->key_, *it);
         }
     }
+    // scan SSTables on disk level by level
+    for (size_t level_i = 0; level_i < levels_.size(); ++level_i) {
+        std::vector<std::shared_ptr<SSTable>> sstables_to_scan;
+        {
+            // can't be const, so can't use getSSTables()
+            std::shared_lock lock(levels_[level_i]->level_mutex_);
+            sstables_to_scan = levels_[level_i]->sstables_;
+        }
+
+        // newer table priority, so we process the new/last tables first
+        std::reverse(sstables_to_scan.begin(), sstables_to_scan.end());
+
+        for (const auto& sstable_ptr : sstables_to_scan) {
+            // skip if not in range
+            if (sstable_ptr->max_key_ < low || sstable_ptr->min_key_ > high) {
+                continue;
+            }
+
+            std::vector<DataPair> sstable_data;
+            bool load_and_successful = false;
+            {
+                std::lock_guard<std::mutex> lock(sstable_ptr->sstable_mutex_);
+                if (!sstable_ptr->data_loaded_) {
+                    if (!sstable_ptr->loadFromDisk()) {
+                        std::cerr << "[LSMTree] Error loading SSTable data from disk." << std::endl;
+                        continue;
+                    }
+                }
+            }
+            
+            // check again after potential load
+            if (sstable_ptr->data_loaded_) {
+                sstable_data = sstable_ptr->table_data_;
+                load_and_successful = true;
+            }
+            if (sstable_data.empty() || !load_and_successful) {
+                continue;
+            }
+            // binary search on [first, last), return first element not less than low
+            // so we can start fill in there
+            auto it_low = std::lower_bound(sstable_data.begin(), 
+                                           sstable_data.end(), low);
+            for (auto it = it_low; it->key_ < high && it != sstable_data.end(); ++it) {
+                // if key not in results_map, add
+                // level by level: lower level first
+                // only add if doesn't exist in results_map yet
+                if (results_map.find(it->key_) == results_map.end()) {
+                    results_map.emplace(it->key_, *it);
+                }
+            }
+        }
+    }
+
+    // populate final results using results_map, and filter out tombstones
+    final_results.reserve(results_map.size());
+    for (const auto& pair_entry : results_map) {
+        if (!pair_entry.second.deleted_) {
+            final_results.push_back(pair_entry.second);
+        }
+    }
+    return final_results;
 }
 
 // delete is just putting in the tombstone in the buffer for now
@@ -1268,13 +1333,20 @@ std::vector<std::shared_ptr<SSTable>> LSMTree::mergeSSTables(
     // load all input data first before merge
     std::vector<std::vector<DataPair>> input_data_vecs(all_inputs.size());
     std::vector<size_t> input_levels(all_inputs.size());
+
     for(size_t i = 0; i < all_inputs.size(); ++i) {
-        if (!all_inputs[i]->data_loaded_) {
-            if (!all_inputs[i]->loadFromDisk()) {
-                 std::cerr << "Error loading input table " << all_inputs[i]->file_path_ << " for merge." << std::endl;
-                 throw std::runtime_error("Failed to load input SSTable for merge");
+        std::vector<DataPair> table_data_copy;
+        bool load_and_successful = false;
+        {
+            std::lock_guard<std::mutex> lock(all_inputs[i]->sstable_mutex_);
+            if (!all_inputs[i]->data_loaded_) {
+                if (!all_inputs[i]->loadFromDisk()) {
+                    std::cerr << "Error loading input table " << all_inputs[i]->file_path_ << " for merge." << std::endl;
+                    throw std::runtime_error("Failed to load input SSTable for merge");
+                }
             }
         }
+    
         input_data_vecs[i] = all_inputs[i]->table_data_; 
         input_levels[i] = all_inputs[i]->level_num_;
         // do I unload the data? 
@@ -1385,7 +1457,7 @@ void LSMTree::compactThreadLoop() {
               << "] Started." << std::endl;
 
     while (true) {
-        size_t level_to_compact = -1;
+        int level_to_compact = -1;
         {
             std::unique_lock lock(this->compaction_mutex_);
             // get notified if compaction task is available
@@ -1474,7 +1546,10 @@ void LSMTree::flushBufferHelper() {
 // check if compaction is needed for the given level
 void LSMTree::doCompactionCheck(size_t level_index) {
     // if last level or shutdown requested, ignore
-    if (shutdown_requested_ || level_index >= levels_.size()) {
+    if (shutdown_requested_) {
+        return;
+    }
+    if (level_index >= levels_.size()) {
         return;
     }
 
@@ -1556,4 +1631,20 @@ void LSMTree::compactLevelHelper(size_t level_index) {
 
     // after compacted this level, compact the next if needed
     doCompactionCheck(next_level_index);
+}
+
+// Strictly for testing purposes
+bool SSTable::keyInSSTable(int key) {
+    if (!keyInRange(key)) { return false; }
+
+    if (!data_loaded_) {
+        if (!loadFromDisk()) {
+        std::cerr << "can't load SSTable " << file_path_ << std::endl;
+            return false;
+        }
+    }
+    // Perform binary search
+    // TODO: use fence pointers
+    auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
+    return (it != table_data_.end() && it->key_ == key);
 }

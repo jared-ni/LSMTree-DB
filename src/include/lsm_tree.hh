@@ -251,7 +251,7 @@ class LSMTree {
     // API: put, get, range, delete
     bool putData(const DataPair& data);
     std::optional<DataPair> getData(int key);
-    void rangeData(int low, int high);
+    std::vector<DataPair> rangeData(int low, int high);
     bool deleteData(int key);
 
     // set up DB directory and history
@@ -282,6 +282,17 @@ struct MergeEntry {
         }
         // prioritize the one from the lower level, min_heap so higher is later
         return source_level_num > other.source_level_num;
+    }
+};
+
+struct RangeEntry {
+    DataPair data;
+    int source_level;
+    bool operator>(const RangeEntry& other) const {
+        if (data.key_ != other.data.key_) {
+            return data.key_ > other.data.key_;
+        }
+        return source_level > other.source_level;
     }
 };
 
