@@ -123,14 +123,41 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
             break;
         }
         case 'l': {
-            query_command += 1;
+            query_command += 1; // Skip the 'l'
             dbo->type = LOAD;
-            // load first argument here:
-            parse_args(query_command, dbo);
-            if (dbo->args.size() != 1) {
-                send_message->status = INCORRECT_FORMAT;
-                delete dbo;
-                return NULL;
+
+            // Trim leading whitespace from remaining_command
+            while (*query_command && isspace((unsigned char)*query_command)) {
+                query_command++;
+            }
+
+            if (*query_command == '\0') { 
+                // std::cerr << "LOAD command missing file path." << std::endl; // For debugging
+                break; 
+            }
+
+            std::string path_str;
+            if (*query_command == '"') {
+                query_command++;
+                const char* end_quote = strchr(query_command, '"');
+                if (end_quote) {
+                    path_str.assign(query_command, end_quote - query_command);
+                    // query_command = end_quote + 1; // To check for trailing chars, if needed
+                } else {
+                    break;
+                }
+            } else { 
+                // read until whitespace or end of string
+                const char* start_of_path = query_command;
+                while (*query_command && !isspace((unsigned char)*query_command)) {
+                    query_command++;
+                }
+                path_str.assign(start_of_path, query_command - start_of_path);
+            }
+
+            // Store the path in s_args
+            if (!path_str.empty()) {
+                dbo->s_args.push_back(path_str);
             }
             break;
         }

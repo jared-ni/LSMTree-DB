@@ -121,20 +121,120 @@ char* execute_DbOperator(DbOperator* query) {
         if (num_args != 1) {
              return strdup("[SERVER] Error: DELETE requires 1 argument (key).");
         }
-        int key_ll = query->args[0];
-        int key = static_cast<int>(key_ll);
+        int key = query->args[0];
+        bool deleted_processed = lsm_tree_ptr->deleteData(key);
 
-        if (lsm_tree_ptr->deleteData(key)) {
-             char buffer[100];
-             snprintf(buffer, sizeof(buffer), "[SERVER] DELETE requested for key %d.", key_ll);
-            return strdup(buffer);
+        if (deleted_processed) {
+            char response_buffer[138];
+            snprintf(response_buffer, sizeof(response_buffer), 
+                     "[SERVER] Key %d marked for deletion.", key);
+            return strdup(response_buffer);
         } else {
-            return strdup("[SERVER] Error: DELETE operation failed internally.");
+            char error_buffer[128];
+            snprintf(error_buffer, sizeof(error_buffer),
+                     "[SERVER] Error: Failed to process DELETE for key %d internally.", key);
+            return strdup(error_buffer);
         }
 
     } else if (query->type == LOAD) {
-        std::cout << "loading " << std::endl;
-        return strdup("[SERVER] LOAD query not implemented.");
+        if (query->s_args.empty() || query->s_args[0].empty()) {
+            return strdup("[SERVER] Error: LOAD requires a file path argument.");
+        }
+        const std::string& file_path = query->s_args[0];
+        // log_info("[SERVER] LOAD command processing file: %s\n", file_path.c_str()); // Optional: for server logs
+
+        // REMOVE THIS LINE: return strdup("[SERVER] LOAD query not implemented.");
+
+        // open file in binary, and every 4 bytes is a key, and 4 more bytes is a value
+        char cwd[1024];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            log_info("[SERVER CWD] Current working directory: %s\n", cwd);
+        } else {
+            log_err("[SERVER CWD] getcwd() error\n");
+        }
+        log_info("[SERVER] Attempting to load file with path argument: '%s'\n", file_path.c_str());
+        
+        std::ifstream file(file_path, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            char err_buf[FILENAME_MAX + 128]; // Ensure FILENAME_MAX is available (usually from <stdio.h> or <limits.h>)
+            snprintf(err_buf, sizeof(err_buf), "[SERVER] Error: Cannot open file '%s': %s",
+                     file_path.c_str(), strerror(errno)); // strerror needs <cstring> and errno needs <cerrno>
+            return strdup(err_buf);
+        }
+        std::streamsize file_size = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        if (file_size == 0) {
+            file.close();
+            char msg_buf[FILENAME_MAX + 64];
+            snprintf(msg_buf, sizeof(msg_buf), "[SERVER] LOAD file '%s' is empty. 0 pairs loaded.", file_path.c_str());
+            return strdup(msg_buf);
+        }
+
+        // file_size must be a multiple of 8 (4+4 bytes key/val pairs)
+        if (file_size % 8 != 0) {
+            file.close();
+            char err_buf[FILENAME_MAX + 128];
+            snprintf(err_buf, sizeof(err_buf),
+                     "[SERVER] Error: LOAD file '%s' has incorrect size (%lld bytes). Must be a multiple of 8 bytes for key-value pairs.",
+                     file_path.c_str(), (long long)file_size);
+            return strdup(err_buf);
+        }
+
+        int key_from_file;
+        int value_from_file;
+        unsigned long items_processed_from_file = 0;
+        unsigned long items_successfully_put = 0;
+        bool read_error_occurred = false;
+
+        // read key/val pairs from file
+        while (file.good() && (items_processed_from_file < (unsigned long)(file_size / 8))) {
+            // Read 4 bytes for the key
+            if (!file.read(reinterpret_cast<char*>(&key_from_file), sizeof(key_from_file))) {
+                if (!file.eof()) { // If not EOF, it's an actual read error
+                    read_error_occurred = true;
+                }
+                break; // Exit loop on read failure or EOF for key
+            }
+            // Read 4 bytes for the value
+            if (!file.read(reinterpret_cast<char*>(&value_from_file), sizeof(value_from_file))) {
+                if (!file.eof()) { // If not EOF, it's an actual read error for value
+                    read_error_occurred = true;
+                }
+                // This implies we read a key but couldn't read its corresponding value
+                log_err("[SERVER] LOAD: Read key but failed to read value from '%s'. File might be truncated or corrupt.\n", file_path.c_str());
+                break;
+            }
+            // track items processed
+            items_processed_from_file++;
+            DataPair data_to_put(key_from_file, value_from_file, false);
+
+            if (lsm_tree_ptr->putData(data_to_put)) {
+                items_successfully_put++;
+            } else {
+                log_err("[SERVER] LOAD: putData failed for key %d, value %d from file '%s'. Continuing.\n",
+                        key_from_file, value_from_file, file_path.c_str());
+            }
+        } // End of while loop
+
+        // ---- MOVED THIS LOGIC OUTSIDE THE WHILE LOOP ----
+        // file.close(); // MOVE THIS LINE to after checking read_error_occurred and sending success/error message for the whole file
+
+        if (read_error_occurred) {
+            file.close(); // Close file before returning error
+            char err_buf[FILENAME_MAX + 128];
+            snprintf(err_buf, sizeof(err_buf),
+                    "[SERVER] Error: A read error occurred while processing file '%s' after %lu pairs.",
+                    file_path.c_str(), items_processed_from_file);
+            return strdup(err_buf);
+        }
+
+        file.close(); // Close file after successful processing or non-fatal EOF
+        char success_buf[FILENAME_MAX + 128];
+        snprintf(success_buf, sizeof(success_buf),
+                "[SERVER] LOAD successful. Processed %lu pairs, successfully put %lu pairs into LSM Tree from '%s'.",
+                items_processed_from_file, items_successfully_put, file_path.c_str());
+        return strdup(success_buf);
 
     } else if (query->type == PRINT_STATS) {
         std::cout << "printing stats" << std::endl;
