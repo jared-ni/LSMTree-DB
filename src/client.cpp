@@ -85,7 +85,6 @@ int main(void)
     }
 
     const char *output_str = NULL;
-    int len = 0;
 
     // loop and wait for:
     // 1. output interactive marker

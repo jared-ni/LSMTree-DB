@@ -149,7 +149,6 @@ void test_sstable() {
 // Level tests
 void test_level() {
     const size_t table_capacity = 2;
-    const size_t entries_capacity = 4;
 
     std::cout << "[TEST] Testing Level ------------" << std::endl;
     create_temp_dir(TEMP_SSTABLE_DIR);
@@ -158,7 +157,6 @@ void test_level() {
     Level level(1, table_capacity);
     assert(level.level_num_ == 1);
     assert(level.table_capacity_ == table_capacity);
-    // assert(level.entries_capacity_ == entries_capacity);
     assert(level.cur_table_count_ == 0);
     assert(level.cur_total_entries_ == 0);
     assert(level.getSSTables().empty());

@@ -75,7 +75,7 @@ char* execute_DbOperator(DbOperator* query) {
             char buffer[64];
             // Use the values from the result DataPair (which are 'long')
             int len = snprintf(buffer, sizeof(buffer), "%d:%d", result.value().key_, result.value().value_);
-            if (len < 0 || len >= sizeof(buffer)) {
+            if (len < 0 || static_cast<unsigned long>(len) >= sizeof(buffer)) {
                 return strdup("[SERVER] Error: Failed to format GET result.");
             }
             return strdup(buffer);
@@ -87,8 +87,7 @@ char* execute_DbOperator(DbOperator* query) {
         }
 
     } else if (query->type == RANGE) {
-        // if (num_args != 2) { // Check using size() if vector
-        if (num_args != 2) {    // Check using num_args field
+        if (num_args != 2) {
             return strdup("[SERVER] Error: RANGE requires 2 arguments (start_key, end_key).");
         }
         int start_key = query->args[0];
@@ -141,9 +140,6 @@ char* execute_DbOperator(DbOperator* query) {
             return strdup("[SERVER] Error: LOAD requires a file path argument.");
         }
         const std::string& file_path = query->s_args[0];
-        // log_info("[SERVER] LOAD command processing file: %s\n", file_path.c_str()); // Optional: for server logs
-
-        // REMOVE THIS LINE: return strdup("[SERVER] LOAD query not implemented.");
 
         // open file in binary, and every 4 bytes is a key, and 4 more bytes is a value
         char cwd[1024];
