@@ -682,42 +682,128 @@ void LSMTree::setupDB() {
     // makes sure path looks good
     if (!std::filesystem::exists(db_path_) || 
         !std::filesystem::is_directory(db_path_)) {
-        // std::cout << "[LSMTree] no database directory, creating at: " << db_path_ << std::endl;
         if (!std::filesystem::create_directories(db_path_, ec)) {
-            // Fatal error if DB directory cannot be created
             std::cerr << "Failed creating db dir " << db_path_ << ": " << ec.message() << std::endl;
             throw std::runtime_error("failed to create DB directory");
         }
     }
 
-    // set up levels
+    // configure each level
+    int max_loaded_file_id = 0;
     for (size_t i = 0; i < total_levels_; ++i) {
-        // returns the path for each level, given level num
-        std::string level_path = getLevelPath(i);
+        std::string level_path_str = getLevelPath(i);
+        std::filesystem::path level_path(level_path_str);
+        std::string bf_dir_path_str = level_path_str + "/bloom_filters";
+        std::filesystem::path bf_dir_path(bf_dir_path_str);
+
+        // directories exist
         if (!std::filesystem::exists(level_path)) {
-            // std::cout << "[LSMTree] creating level directory: " << level_path << std::endl;
             if (!std::filesystem::create_directory(level_path, ec)) {
-                std::cerr << "failed to create level directory " << level_path << ": " << ec.message() << std::endl;
+                std::cerr << "failed to create level directory " << level_path_str << ": " << ec.message() << std::endl;
                 throw std::runtime_error("failed to create level directory");
             }
-            if (!std::filesystem::create_directory(level_path + "/bloom_filters", ec)) {
-                std::cerr << "failed to create bloom filter directory " << level_path + "/bloom_filters" 
-                          << ": " << ec.message() << std::endl;
+        } else if (!std::filesystem::is_directory(level_path)) {
+             std::cerr << "Level path " << level_path_str << " exists but is not a directory." << std::endl;
+            throw std::runtime_error("Level path is not a directory");
+        }
+
+        // bloom filter subdirectory exists
+        if (!std::filesystem::exists(bf_dir_path)) {
+            if (!std::filesystem::create_directory(bf_dir_path, ec)) {
+                std::cerr << "failed to create bloom filter directory " << bf_dir_path_str << ": " << ec.message() << std::endl;
                 throw std::runtime_error("failed to create bloom filter directory");
             }
+        } else if (!std::filesystem::is_directory(bf_dir_path)) {
+            std::cerr << "Bloom filter path " << bf_dir_path_str << " exists but is not a directory." << std::endl;
+            throw std::runtime_error("Bloom filter path is not a directory");
         }
+        // need to load the sstables for the level
+        std::vector<std::pair<uint64_t, std::shared_ptr<SSTable>>> loaded_sstables_for_level;
+
+        // Load SSTables for this level
+        if (std::filesystem::exists(level_path) && std::filesystem::is_directory(level_path)) {
+            
+            for (const auto& entry : std::filesystem::directory_iterator(level_path)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".sst") {
+                    std::string sst_filename = entry.path().filename().string();
+                    std::string sst_file_path_str = entry.path().string();
+                    
+                    try {
+                        // 000000.sst, 000001.sst, 000000 is first
+                        size_t dot_pos = sst_filename.find('.');
+                        if (dot_pos == std::string::npos) {
+                             std::cerr << "[LSMTree::setupDB] Invalid SSTable filename (no extension): " << sst_filename << ". Skipping." << std::endl;
+                             continue;
+                        }
+                        // get the file id
+                        std::string id_str = sst_filename.substr(0, dot_pos);
+                        // Discards any whitespace characters, then cast to an integer
+                        uint64_t file_id = std::stoull(id_str);
+                        
+                        if (file_id > max_loaded_file_id) {
+                            max_loaded_file_id = file_id;
+                        }
+
+                        std::string bf_file_path_str = getBloomFilterPath(i, file_id);
+
+                        // SSTable placeholder that loads the bloom filter
+                        auto sstable_ptr = std::make_shared<SSTable>(i, sst_file_path_str, bf_file_path_str);
+                        
+                        // load the data and metadata: min/max keys, size
+                        // TODO: load just the bloom filter, min/max keys, fence pointers
+                        if (!sstable_ptr->data_loaded_) {
+                            // Attempt to load the data from disk
+                            bool data_loaded = sstable_ptr->loadFromDisk();
+                            if (!data_loaded) { 
+                                std::cerr << "[LSMTree::setupDB] Failed to load data for SSTable " 
+                                          << sst_file_path_str << ". Skipping." << std::endl;
+                                continue; 
+                            }
+                        }
+                        loaded_sstables_for_level.push_back({file_id, sstable_ptr});
+
+                    } catch (const std::invalid_argument& ia) {
+                        std::cerr << "[LSMTree::setupDB] Invalid argument for SSTable filename: " 
+                                  << sst_filename << ". Skipping. Error: " << ia.what() << std::endl;
+                    } catch (const std::out_of_range& oor) {
+                        std::cerr << "[LSMTree::setupDB] Filename number out of range for SSTable: " 
+                                  << sst_filename << ". Skipping. Error: " << oor.what() << std::endl;
+                    } catch (const std::exception& e) {
+                        std::cerr << "[LSMTree::setupDB] Error processing SSTable " << sst_filename 
+                                  << ": " << e.what() << ". Skipping." << std::endl;
+                    }
+                }
+            }
+        }
+        
+        // sort SSTables by ascending file_id before adding to the level
+        std::sort(loaded_sstables_for_level.begin(), loaded_sstables_for_level.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.first < b.first;
+                  });
+        
+        // add sorted sstables to level memory
+        for (const auto& pair : loaded_sstables_for_level) {
+            levels_[i]->addSSTable(pair.second);
+        }
+         std::cout << "[LSMTree::setupDB] Level " << i << " loaded with " 
+                   << loaded_sstables_for_level.size() << " SSTables." << std::endl;
     }
 
-    // check history to load existing state if there's any
-    if (std::filesystem::exists(history_path_)) {
-        // std::cout << "[LSMTree] loading history from: " << history_path_ << std::endl;
-        loadHistory();
+    // set the next_file_id_ based on the maximum ID found on disk
+    if (max_loaded_file_id > 0) {
+        next_file_id_.store(max_loaded_file_id + 1);
     } else {
-        // std::cout << "[LSMTree] no history found at: " << history_path_ << std::endl;
-        // If no history, initialize an empty history file
-        // reset the next_file_id_ to 1
-        next_file_id_ = 1;
-        std::ofstream history_file(history_path_);
+        next_file_id_.store(1);
+    }
+    std::cout << "[LSMTree::setupDB] Database setup complete. Next file ID will be: " << next_file_id_.load() << std::endl;
+
+    // may add history file? probably not
+    if (!std::filesystem::exists(history_path_)) {
+        std::ofstream history_file(history_path_); 
+        if (!history_file) {
+            std::cerr << "[LSMTree::setupDB] Warning: Could not create history file at " << history_path_ << std::endl;
+        }
     }
 }
 
@@ -735,8 +821,7 @@ std::string LSMTree::getBloomFilterPath(int level_num, int file_id) const {
 
 
 // TODO: persistence logic of loadHistory()
-void LSMTree::loadHistory() {
-}
+void LSMTree::loadHistory() {}
 
 // can't print otherwise with the mutexes and unique_ptrs
 std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
@@ -768,7 +853,6 @@ std::vector<LevelSnapshot> LSMTree::getLevelsSnapshot() const {
                 level_snap.sstables.push_back(table_snap);
             }
         }
-
         // lock.unlock();
 
         snapshot.push_back(std::move(level_snap));
@@ -806,27 +890,10 @@ void LSMTree::flushBuffer() {
     std::string new_file_path = getFilePath(0, new_file_id);
     std::string bf_file_path = getBloomFilterPath(0, new_file_id);
 
-    // error checks
-    // std::filesystem::path sst_path_check(new_file_path);
-    // std::filesystem::path bf_path_check(bf_file_path);
-    // std::filesystem::path sst_dir = sst_path_check.parent_path();
-    // std::filesystem::path bf_dir = bf_path_check.parent_path();
-    // if (!std::filesystem::exists(sst_dir) || !std::filesystem::is_directory(sst_dir)) {
-    //     std::cerr << "[FlushBuffer PRE-CHECK] SST directory missing: " << sst_dir.string() << std::endl;
-    //     next_file_id_--;
-    //     return;
-    // }
-    // if (!std::filesystem::exists(bf_dir) || !std::filesystem::is_directory(bf_dir)) {
-    //     std::cerr << "[FlushBuffer PRE-CHECK] BF directory missing: " << bf_dir.string() << std::endl;
-    //     next_file_id_--;
-    //     return;
-    // }
-
     std::shared_ptr<SSTable> sstable_ptr = nullptr;
     try {
         // create the SSTable object and write to disk
         sstable_ptr = std::make_shared<SSTable>(data_to_flush, 0, new_file_path, bf_file_path);
-        // std::cout << "[LSMTree] flushed buffer to new SSTable file: " << new_file_path << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "can't create/write SSTable during flush: " << e.what() << std::endl;
         // If file creation failed revert file id
@@ -929,17 +996,9 @@ std::optional<DataPair> LSMTree::getData(int key) {
     return std::nullopt;
 }
 
-// TODO: need to implement still
+// range data API, returns all data in range [low, high)
 std::vector<DataPair> LSMTree::rangeData(int low, int high) {
     // if (shutdown_requested_) return std::vector<DataPair>();
-    // for (int i = low; i < high; i++) {
-    //     std::optional<DataPair> data_pair = getData(i);
-    //     if (data_pair.has_value()) {
-    //         // std::cout << i << ":" << data_pair.value().value_ << std::endl;
-    //     } else {
-    //         // std::cout << std::endl;
-    //     }
-    // }
     std::vector<DataPair> final_results;
     std::map<int, DataPair> results_map;
 
