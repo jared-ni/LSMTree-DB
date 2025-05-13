@@ -164,11 +164,12 @@ DbOperator* parse_command(char* query_command, message* send_message, int client
         case 's': {
             query_command += 1;
             dbo->type = PRINT_STATS;
-            // print stats: no arguments
-            if (strlen(query_command) != 0) {
-                send_message->status = INCORRECT_FORMAT;
-                delete dbo;
-                return NULL;
+            // trim white space
+            while (*query_command && isspace((unsigned char)*query_command)) {
+                query_command++;
+            }
+            if (*query_command == '\0') {
+                dbo->type = PRINT_STATS;
             }
             break;
         }

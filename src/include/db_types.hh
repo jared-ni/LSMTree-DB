@@ -16,7 +16,10 @@ typedef struct DbOperator {
     OperatorType type;
     int client_fd;
 
-    std::vector<long long> args;
+    std::vector<int> args;
+    // for loading a string path
+    std::vector<std::string> s_args;
+
 } DbOperator;
 
 #endif

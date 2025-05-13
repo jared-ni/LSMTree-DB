@@ -20,7 +20,7 @@
 #include "bloom_filter.hh"
 
 
-#define BUFFER_CAPACITY 100
+#define BUFFER_CAPACITY 2
 #define BASE_LEVEL_TABLE_CAPACITY 2
 #define LEVEL_SIZE_RATIO 2 // how much bigger l1 is than l0
 #define MAX_LEVELS 10
@@ -269,6 +269,9 @@ class LSMTree {
 
     // for testing
     std::vector<LevelSnapshot> getLevelsSnapshot() const;
+
+    // for the print stats s command
+    std::string print_stats();
 };
 
 struct MergeEntry {

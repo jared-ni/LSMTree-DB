@@ -157,3 +157,10 @@ and have one bloom filter per level instead.
 - need to write multi-thread for reads as well. 
     - search async on each level in getData()
     - parallelize range gets()
+
+5/12:
+- need to clean up code
+- need to test all the things that the PDF requires
+- need to fix rangeData()
+- need to do print_stats()
+

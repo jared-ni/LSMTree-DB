@@ -1191,7 +1191,7 @@ bool LSMTree::deleteData(int key) {
     // mark data in buffer as tombstone, if found
     DataPair tombstone_data(key, 0, true);
     
-    this->putData(tombstone_data);
+    return this->putData(tombstone_data);
 }
 
 // persistence
@@ -1647,4 +1647,131 @@ bool SSTable::keyInSSTable(int key) {
     // TODO: use fence pointers
     auto it = std::lower_bound(table_data_.begin(), table_data_.end(), key);
     return (it != table_data_.end() && it->key_ == key);
+}
+
+// print stats commands
+// map is unique key:value pairs
+// In lsm_tree.cpp
+std::string LSMTree::print_stats() {
+    // latest version and source for each key
+    std::map<int, std::pair<DataPair, std::string>> logical_data_map;
+
+    // buffer data collection
+    {
+        std::shared_lock lock(buffer_->buffer_mutex_);
+        for (const auto& dp : buffer_->buffer_data_) {
+            logical_data_map.insert_or_assign(dp.key_, std::make_pair(dp, "BUF"));
+        }
+    }
+
+    // level data collection
+    for (size_t i = 0; i < levels_.size(); ++i) {
+        const auto& level_ptr = levels_[i];
+        std::string current_level_label = "L" + std::to_string(i + 1);
+
+        std::vector<std::shared_ptr<SSTable>> sstables_from_level;
+        {
+            std::shared_lock lock(level_ptr->level_mutex_);
+            sstables_from_level = level_ptr->sstables_;
+        }
+        std::reverse(sstables_from_level.begin(), sstables_from_level.end());
+
+        for (const auto& sstable_ptr : sstables_from_level) {
+            std::vector<DataPair> sstable_data_content;
+            {
+                std::lock_guard<std::mutex> sstable_lock(sstable_ptr->sstable_mutex_);
+                if (!sstable_ptr->data_loaded_) {
+                    if (!sstable_ptr->loadFromDisk()) {
+                        std::cerr << "[STATS_ERROR] Failed to load SSTable " << sstable_ptr->file_path_
+                                  << " for stats." << std::endl;
+                        continue;
+                    }
+                }
+                sstable_data_content = sstable_ptr->table_data_;
+            }
+
+            for (const auto& dp : sstable_data_content) {
+                if (logical_data_map.find(dp.key_) == logical_data_map.end()) {
+                    logical_data_map.insert_or_assign(dp.key_, std::make_pair(dp, current_level_label));
+                }
+            }
+        }
+    }
+
+    // calculate total logical pairs (non-deleted)
+    int total_logical_pairs = 0;
+    // group data by source for printing KVL lines later AND for counts
+    std::map<std::string, std::vector<DataPair>> data_grouped_by_source;
+    // entry.first is key, entry.second is pair<DataPair, string_label>
+    for (const auto& entry : logical_data_map) {
+        if (!entry.second.first.deleted_) {
+            total_logical_pairs++;
+            data_grouped_by_source[entry.second.second].push_back(entry.second.first);
+        }
+    }
+
+    // construct the output string
+    std::stringstream result_ss;
+
+    // logical pairs: first line
+    result_ss << "Logical Pairs: " << total_logical_pairs;
+
+    // counts for all sources on one line
+    std::stringstream counts_line_ss;
+    bool first_count_on_line = true;
+
+    // Buffer count
+    std::string buf_label = "BUF";
+    if (data_grouped_by_source.count(buf_label) && !data_grouped_by_source[buf_label].empty()) {
+        counts_line_ss << buf_label << ": " << data_grouped_by_source[buf_label].size();
+        first_count_on_line = false;
+    }
+
+    // level counts
+    for (size_t i = 0; i < levels_.size(); ++i) {
+        std::string level_label = "L" + std::to_string(i + 1);
+        if (data_grouped_by_source.count(level_label) && !data_grouped_by_source[level_label].empty()) {
+            if (!first_count_on_line) {
+                counts_line_ss << ", ";
+            }
+            counts_line_ss << level_label << ": " << data_grouped_by_source[level_label].size();
+            first_count_on_line = false;
+        }
+    }
+
+    std::string counts_line_str = counts_line_ss.str();
+    if (!counts_line_str.empty()) {
+        result_ss << "\n" << counts_line_str;
+    }
+
+    // KVL data, grouped by source, each group on its own line
+    auto print_kvl_for_source = 
+        [&](const std::string& source_label, const std::string& display_label) {
+        if (data_grouped_by_source.count(source_label)) {
+            const auto& pairs_from_source = data_grouped_by_source[source_label];
+            if (!pairs_from_source.empty()) {
+                result_ss << "\n";
+                bool first_kvl_in_section = true;
+                // print each key-value pair
+                for (const auto& dp : pairs_from_source) { 
+                    if (!first_kvl_in_section) {
+                        result_ss << " ";
+                    }
+                    result_ss << dp.key_ << ":" << dp.value_ << ":" << display_label;
+                    first_kvl_in_section = false;
+                }
+            }
+        }
+    };
+
+    // Print KVL for Buffer
+    print_kvl_for_source("BUF", "BUF");
+
+    // Print KVL for Levels
+    for (size_t i = 0; i < levels_.size(); ++i) {
+        std::string level_label = "L" + std::to_string(i + 1);
+        print_kvl_for_source(level_label, level_label);
+    }
+
+    return result_ss.str();
 }

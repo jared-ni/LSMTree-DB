@@ -156,9 +156,9 @@ char* execute_DbOperator(DbOperator* query) {
         
         std::ifstream file(file_path, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
-            char err_buf[FILENAME_MAX + 128]; // Ensure FILENAME_MAX is available (usually from <stdio.h> or <limits.h>)
+            char err_buf[FILENAME_MAX + 128];
             snprintf(err_buf, sizeof(err_buf), "[SERVER] Error: Cannot open file '%s': %s",
-                     file_path.c_str(), strerror(errno)); // strerror needs <cstring> and errno needs <cerrno>
+                     file_path.c_str(), strerror(errno));
             return strdup(err_buf);
         }
         std::streamsize file_size = file.tellg();
@@ -191,10 +191,10 @@ char* execute_DbOperator(DbOperator* query) {
         while (file.good() && (items_processed_from_file < (unsigned long)(file_size / 8))) {
             // Read 4 bytes for the key
             if (!file.read(reinterpret_cast<char*>(&key_from_file), sizeof(key_from_file))) {
-                if (!file.eof()) { // If not EOF, it's an actual read error
+                if (!file.eof()) {
                     read_error_occurred = true;
                 }
-                break; // Exit loop on read failure or EOF for key
+                break;
             }
             // Read 4 bytes for the value
             if (!file.read(reinterpret_cast<char*>(&value_from_file), sizeof(value_from_file))) {
@@ -215,13 +215,10 @@ char* execute_DbOperator(DbOperator* query) {
                 log_err("[SERVER] LOAD: putData failed for key %d, value %d from file '%s'. Continuing.\n",
                         key_from_file, value_from_file, file_path.c_str());
             }
-        } // End of while loop
-
-        // ---- MOVED THIS LOGIC OUTSIDE THE WHILE LOOP ----
-        // file.close(); // MOVE THIS LINE to after checking read_error_occurred and sending success/error message for the whole file
+        } 
 
         if (read_error_occurred) {
-            file.close(); // Close file before returning error
+            file.close();
             char err_buf[FILENAME_MAX + 128];
             snprintf(err_buf, sizeof(err_buf),
                     "[SERVER] Error: A read error occurred while processing file '%s' after %lu pairs.",
@@ -229,7 +226,7 @@ char* execute_DbOperator(DbOperator* query) {
             return strdup(err_buf);
         }
 
-        file.close(); // Close file after successful processing or non-fatal EOF
+        file.close();
         char success_buf[FILENAME_MAX + 128];
         snprintf(success_buf, sizeof(success_buf),
                 "[SERVER] LOAD successful. Processed %lu pairs, successfully put %lu pairs into LSM Tree from '%s'.",
@@ -237,11 +234,9 @@ char* execute_DbOperator(DbOperator* query) {
         return strdup(success_buf);
 
     } else if (query->type == PRINT_STATS) {
-        std::cout << "printing stats" << std::endl;
-        return strdup("[SERVER] PRINT_STATS not implemented.");
-
-    } else if (query->type == INCORRECT_FORMAT) {
-        return strdup("[SERVER] Error: Invalid query format detected by parser."); // Modified message slightly
+        // directly call the print_stats function
+        std::string stats_output = lsm_tree_ptr->print_stats();
+        return strdup(stats_output.c_str());
     } else {
         return strdup("[SERVER] Error: Unknown query type.");
     }
@@ -277,7 +272,7 @@ void handle_client_request(int client_socket) {
 
     if (strncmp(result, "[SERVER] Error", 14) == 0 || strncmp(result, "[CLIENT] Error", 14) == 0) {
         send_message.status = EXECUTION_ERROR;
-    } else if (strstr(result, "not found.") != NULL) { // Adjusted check slightly
+    } else if (strstr(result, "not found.") != NULL) {
          send_message.status = OBJECT_NOT_FOUND;
     } else {
         send_message.status = OK_WAIT_FOR_RESPONSE;
