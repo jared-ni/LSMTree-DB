@@ -160,12 +160,12 @@ class Level {
 // buffer/memtable, where all data is stored before being flushed to disk
 class Buffer {
     public:
-    Buffer(size_t capacity = BUFFER_CAPACITY, size_t cur_size = 0);
+    Buffer(size_t capacity = BUFFER_CAPACITY);
     
     size_t capacity_;
-    size_t cur_size_;
     // need to refactor to balanced binary tree, skip list, or B tree
-    std::vector<DataPair> buffer_data_;
+    // std::vector<DataPair> buffer_data_;
+    std::map<int, DataPair> buffer_data_;
 
     // add concurrency protection for buffer synchronization
     // mutable std::mutex buffer_mutex_;

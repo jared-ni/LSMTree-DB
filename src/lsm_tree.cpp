@@ -532,24 +532,26 @@ void LevelSnapshot::printLevel() const{
  * 
  */
 
-Buffer::Buffer(size_t capacity, size_t cur_size) {
+Buffer::Buffer(size_t capacity) {
     this->capacity_ = capacity;
-    this->cur_size_ = cur_size;
     // reserve space for buffer_data_ so it doesn't have to resize
-    buffer_data_.reserve(capacity);
+    // buffer_data_.reserve(capacity);
 }
 
 bool Buffer::isFull() const {
     // lock the buffer mutex
     // std::lock_guard<std::mutex> lock(this->buffer_mutex_);
     std::shared_lock lock(this->buffer_mutex_);
-    return cur_size_ >= capacity_;
+    // return cur_size_ >= capacity_;
+    return buffer_data_.size() >= capacity_;
 }
 
 // print buffer for debugging
 void Buffer::printBuffer() const {
+    std::shared_lock lock(this->buffer_mutex_);
     std::cout << "Buffer: ";
-    for (const auto& data : buffer_data_) {
+    for (const auto& pair_entry : buffer_data_) {
+        const DataPair& data = pair_entry.second;
         std::cout << data.key_ << ":" << data.value_ << ", ";
     }
     std::cout << std::endl;
@@ -577,27 +579,33 @@ bool Buffer::putData(const DataPair& data) {
 
     // search through buffer to see if data exists, if so, update it
     // will be more efficient once I refactor to a tree/skip list
-    auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), data.key_);
-    if (it != buffer_data_.end() && it->key_ == data.key_) {
-        it->value_ = data.value_;
-        it->deleted_ = data.deleted_;
-    } else {
-        // insert data in sorted order
-        buffer_data_.insert(it, data);
-        cur_size_++;
-    }
+    // auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), data.key_);
+    // if (it != buffer_data_.end() && it->key_ == data.key_) {
+    //     it->value_ = data.value_;
+    //     it->deleted_ = data.deleted_;
+    // } else {
+    //     // insert data in sorted order
+    //     buffer_data_.insert(it, data);
+    //     cur_size_++;
+    // }
+    buffer_data_.insert_or_assign(data.key_, data);
     return true;
 }
 
 // get data from buffer, shared mutex
 std::optional<DataPair> Buffer::getData(int key) const {
     // lock the get operation in the buffer
-    std::shared_lock<std::shared_mutex> lock(this->buffer_mutex_);
+    // std::shared_lock<std::shared_mutex> lock(this->buffer_mutex_);
+    std::shared_lock lock(this->buffer_mutex_);
 
     // search through buffer to see if data exists, for now
-    auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
-    if (it != buffer_data_.end() && it->key_ == key) {
-        return *it;
+    // auto it = std::lower_bound(buffer_data_.begin(), buffer_data_.end(), key);
+    // if (it != buffer_data_.end() && it->key_ == key) {
+    //     return *it;
+    // }
+    auto it = buffer_data_.find(key);
+    if (it != buffer_data_.end()) {
+        return it->second;
     }
     return std::nullopt;
 
@@ -872,9 +880,12 @@ void LSMTree::flushBuffer() {
         if (buffer_->buffer_data_.empty()) {
             return;
         }
-        data_to_flush = buffer_->buffer_data_;
+        // data_to_flush = buffer_->buffer_data_;
+        data_to_flush.reserve(buffer_->buffer_data_.size());
+        for (const auto& pair : buffer_->buffer_data_) {
+            data_to_flush.push_back(pair.second);
+        }
         buffer_->buffer_data_.clear();
-        buffer_->cur_size_ = 0;
         buffer_was_empty = false;
     }
     // if buffer is empty, we don't flush
@@ -1005,12 +1016,15 @@ std::vector<DataPair> LSMTree::rangeData(int low, int high) {
     // scan the buffer
     {
         std::shared_lock<std::shared_mutex> lock(buffer_->buffer_mutex_);
-        auto it_low = std::lower_bound(buffer_->buffer_data_.begin(), 
-                                       buffer_->buffer_data_.end(), low);
-        for (auto it = it_low; it != buffer_->buffer_data_.end() && it->key_ < high; ++it) {
+        // auto it_low = std::lower_bound(buffer_->buffer_data_.begin(), 
+        //                                buffer_->buffer_data_.end(), low);
+        // for (auto it = it_low; it != buffer_->buffer_data_.end() && it->key_ < high; ++it) {
+        auto it_low = buffer_->buffer_data_.lower_bound(low);
+        for (auto it = it_low; it != buffer_->buffer_data_.end() && it->first < high; ++it) {
             // add to results_map
             // only add if doesn't exist already
-            results_map.emplace(it->key_, *it);
+            // results_map.emplace(it->key_, *it);
+            results_map.emplace(it->first, it->second);
         }
     }
     // scan SSTables on disk level by level
@@ -1394,9 +1408,12 @@ void LSMTree::flushBufferHelper() {
         if (buffer_->buffer_data_.empty()) {
             return;
         }
-        data_to_flush = buffer_->buffer_data_;
+        // data_to_flush = buffer_->buffer_data_;
+        data_to_flush.reserve(buffer_->buffer_data_.size());
+        for (const auto& pair : buffer_->buffer_data_) {
+            data_to_flush.push_back(pair.second);
+        }
         buffer_->buffer_data_.clear();
-        buffer_->cur_size_ = 0;
         buffer_was_empty = false;
     }
     // if buffer is empty, we don't flush
@@ -1550,8 +1567,10 @@ std::string LSMTree::print_stats() {
     // buffer data collection
     {
         std::shared_lock lock(buffer_->buffer_mutex_);
-        for (const auto& dp : buffer_->buffer_data_) {
-            logical_data_map.insert_or_assign(dp.key_, std::make_pair(dp, "BUF"));
+        // for (const auto& dp : buffer_->buffer_data_) {
+        //     logical_data_map.insert_or_assign(dp.key_, std::make_pair(dp, "BUF"));
+        for (const auto& entry : buffer_->buffer_data_) {
+            logical_data_map.insert_or_assign(entry.first, std::make_pair(entry.second, "BUF"));
         }
     }
 
