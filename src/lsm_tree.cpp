@@ -1031,6 +1031,8 @@ std::vector<DataPair> LSMTree::rangeData(int low, int high) {
                 continue;
             }
 
+            // TODO: bloom filter check
+
             std::vector<DataPair> sstable_data;
             bool load_and_successful = false;
             {

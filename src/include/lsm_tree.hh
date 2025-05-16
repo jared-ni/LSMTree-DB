@@ -20,16 +20,16 @@
 #include "bloom_filter.hh"
 
 
-#define BUFFER_CAPACITY 2
+#define BUFFER_CAPACITY 100
 #define BASE_LEVEL_TABLE_CAPACITY 2
 #define LEVEL_SIZE_RATIO 2 // how much bigger l1 is than l0
 #define MAX_LEVELS 10
 // #define MAX_ENTRIES_PER_LEVEL 5120000000000
 #define MAX_TABLE_SIZE 1000000
-#define FENCE_PTR_BLOCK_SIZE 170 // 4096 / 24 = 170 bytes
+#define FENCE_PTR_BLOCK_SIZE 170 // 4096 / (12 * 2) = 170 bytes
 
-// DataPair is 24 bytes if long, 12 bytes if ints
-// 10MB = 10485760 Bytes = 436,907 DataPairs
+// DataPair is 12 bytes
+// 10MB = 10485760 Bytes = 873,814 DataPairs
 class DataPair {
     public:
     DataPair(int key, int value, bool deleted = false);
@@ -93,7 +93,6 @@ class SSTable {
     BloomFilter bloom_filter_;
 
     // TODO: array of fence pointers for binary search on each block
-    // int fence_ptr_count_; // size_ / FENCE_PTR_BLOCK_SIZE
     std::vector<fence_ptr> fence_pointers_;
     // size of each fence pointer block, used for binary search
     size_t fence_pointer_block_size_ = FENCE_PTR_BLOCK_SIZE;
