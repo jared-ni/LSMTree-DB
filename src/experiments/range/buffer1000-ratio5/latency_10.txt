@@ -1,0 +1,57 @@
+Loading workload from: ./experiments/range/10_range.txt
+[LSMTree] Created Level 0 with table capacity: 10 (buffer capacity: 1000)
+[LSMTree] Created Level 1 with table capacity: 50 (buffer capacity: 1000)
+[LSMTree] Created Level 2 with table capacity: 250 (buffer capacity: 1000)
+[LSMTree] Created Level 3 with table capacity: 1250 (buffer capacity: 1000)
+[LSMTree] Created Level 4 with table capacity: 6250 (buffer capacity: 1000)
+[LSMTree] Created Level 5 with table capacity: 31250 (buffer capacity: 1000)
+[LSMTree] Created Level 6 with table capacity: 156250 (buffer capacity: 1000)
+[LSMTree] Created Level 7 with table capacity: 781250 (buffer capacity: 1000)
+[LSMTree] Created Level 8 with table capacity: 3906250 (buffer capacity: 1000)
+[LSMTree] Created Level 9 with table capacity: 19531250 (buffer capacity: 1000)
+[LSMTree setup] parameters: db_path: benchmark_db, buffer_capacity: 1000, base_level_table_capacity: 10, total_levels: 10, level_size_ratio: 5
+[LSMTree::setupDB] Level 0 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 1 loaded with 22 SSTables.
+[LSMTree::setupDB] Level 2 loaded with 73 SSTables.
+[LSMTree::setupDB] Level 3 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 4 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 5 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 6 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 7 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 8 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 9 loaded with 0 SSTables.
+[LSMTree::setupDB] Database setup complete. Next file ID will be: 718385
+[LSMTree] Started 1 flusher and  1 compactor thread.
+[Flusher Thread] Started.
+[Compactor Thread 0x17fe37000] Started.
+Range: 930266801 to 1337548926, lenth: 71834599
+
+Range: -2093061485 to -1005343625, lenth: 191828167
+
+Range: 758074720 to 1504545989, lenth: 131644138
+
+Range: -1847235630 to 964884237, lenth: 495934899
+
+Range: 478573622 to 716516411, lenth: 41961778
+
+Range: -1679434776 to -892900153, lenth: 138708739
+
+Range: -1412690614 to -144297754, lenth: 223696703
+
+Range: -2119159113 to -598672210, lenth: 268167412
+
+Range: 237756618 to 932643665, lenth: 122529740
+
+Range: 714902051 to 1301763801, lenth: 103492445
+
+Total time to perform workload: 1578 seconds. Workload name: ./experiments/range/10_range.txt
+[LSMTree] Shutdown requested. Waiting for threads to finish...
+[Flusher Thread] Exiting.
+[Compactor Thread 0x17fe37000] Exiting.
+[LSMTree] Flusher thread joined.
+[LSMTree] Compactor thread joined.
+[LSMTree] Shutdown complete.
+
+real	38m18.787s
+user	19m8.202s
+sys	6m59.368s
