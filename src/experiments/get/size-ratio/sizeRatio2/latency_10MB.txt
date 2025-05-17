@@ -1,0 +1,37 @@
+Loading workload from: ./experiments/get/10MB_get.txt
+[LSMTree] Created Level 0 with table capacity: 2 (buffer capacity: 1000)
+[LSMTree] Created Level 1 with table capacity: 4 (buffer capacity: 1000)
+[LSMTree] Created Level 2 with table capacity: 8 (buffer capacity: 1000)
+[LSMTree] Created Level 3 with table capacity: 16 (buffer capacity: 1000)
+[LSMTree] Created Level 4 with table capacity: 32 (buffer capacity: 1000)
+[LSMTree] Created Level 5 with table capacity: 64 (buffer capacity: 1000)
+[LSMTree] Created Level 6 with table capacity: 128 (buffer capacity: 1000)
+[LSMTree] Created Level 7 with table capacity: 256 (buffer capacity: 1000)
+[LSMTree] Created Level 8 with table capacity: 512 (buffer capacity: 1000)
+[LSMTree] Created Level 9 with table capacity: 1024 (buffer capacity: 1000)
+[LSMTree setup] parameters: db_path: benchmark_db, buffer_capacity: 1000, base_level_table_capacity: 2, total_levels: 10, level_size_ratio: 2
+[LSMTree::setupDB] Level 0 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 1 loaded with 1 SSTables.
+[LSMTree::setupDB] Level 2 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 3 loaded with 8 SSTables.
+[LSMTree::setupDB] Level 4 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 5 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 6 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 7 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 8 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 9 loaded with 0 SSTables.
+[LSMTree::setupDB] Database setup complete. Next file ID will be: 84244
+[LSMTree] Started 1 flusher and  1 compactor thread.
+[Flusher Thread] Started.
+[Compactor Thread 0x17f563000] Started.
+Total time to perform workload: 0 seconds. Workload name: ./experiments/get/10MB_get.txt
+[LSMTree] Shutdown requested. Waiting for threads to finish...
+[Flusher Thread] Exiting.
+[Compactor Thread 0x17f563000] Exiting.
+[LSMTree] Flusher thread joined.
+[LSMTree] Compactor thread joined.
+[LSMTree] Shutdown complete.
+
+real	0m54.319s
+user	0m52.819s
+sys	0m0.810s

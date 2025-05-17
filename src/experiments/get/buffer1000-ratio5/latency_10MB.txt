@@ -1,4 +1,4 @@
-Loading workload from: ./experiments/range/10_range.txt
+Loading workload from: ./experiments/get/10MB_get.txt
 [LSMTree] Created Level 0 with table capacity: 10 (buffer capacity: 1000)
 [LSMTree] Created Level 1 with table capacity: 50 (buffer capacity: 1000)
 [LSMTree] Created Level 2 with table capacity: 250 (buffer capacity: 1000)
@@ -23,35 +23,15 @@ Loading workload from: ./experiments/range/10_range.txt
 [LSMTree::setupDB] Database setup complete. Next file ID will be: 8848
 [LSMTree] Started 1 flusher and  1 compactor thread.
 [Flusher Thread] Started.
-[Compactor Thread 0x16fe6b000] Started.
-Range: 930266801 to 1337548926, lenth: 790779
-
-Range: -2093061485 to -1005343625, lenth: 2107994
-
-Range: 758074720 to 1504545989, lenth: 1447234
-
-Range: -1847235630 to 964884237, lenth: 5451043
-
-Range: 478573622 to 716516411, lenth: 461125
-
-Range: -1679434776 to -892900153, lenth: 1524592
-
-Range: -1412690614 to -144297754, lenth: 2459254
-
-Range: -2119159113 to -598672210, lenth: 2945727
-
-Range: 237756618 to 932643665, lenth: 1346383
-
-Range: 714902051 to 1301763801, lenth: 1138564
-
-Total time to perform workload: 4 seconds. Workload name: ./experiments/range/10_range.txt
+[Compactor Thread 0x16fab3000] Started.
+Total time to perform workload: 0 seconds. Workload name: ./experiments/get/10MB_get.txt
 [LSMTree] Shutdown requested. Waiting for threads to finish...
 [Flusher Thread] Exiting.
-[Compactor Thread 0x16fe6b000] Exiting.
+[Compactor Thread 0x16fab3000] Exiting.
 [LSMTree] Flusher thread joined.
 [LSMTree] Compactor thread joined.
 [LSMTree] Shutdown complete.
 
-real	0m9.796s
-user	0m9.246s
-sys	0m0.285s
+real	0m6.277s
+user	0m6.001s
+sys	0m0.077s

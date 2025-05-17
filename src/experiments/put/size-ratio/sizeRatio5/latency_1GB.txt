@@ -1,0 +1,37 @@
+Loading workload from: ./experiments/put/1GB_put.txt
+[LSMTree] Created Level 0 with table capacity: 2 (buffer capacity: 1000)
+[LSMTree] Created Level 1 with table capacity: 10 (buffer capacity: 1000)
+[LSMTree] Created Level 2 with table capacity: 50 (buffer capacity: 1000)
+[LSMTree] Created Level 3 with table capacity: 250 (buffer capacity: 1000)
+[LSMTree] Created Level 4 with table capacity: 1250 (buffer capacity: 1000)
+[LSMTree] Created Level 5 with table capacity: 6250 (buffer capacity: 1000)
+[LSMTree] Created Level 6 with table capacity: 31250 (buffer capacity: 1000)
+[LSMTree] Created Level 7 with table capacity: 156250 (buffer capacity: 1000)
+[LSMTree] Created Level 8 with table capacity: 781250 (buffer capacity: 1000)
+[LSMTree] Created Level 9 with table capacity: 3906250 (buffer capacity: 1000)
+[LSMTree setup] parameters: db_path: benchmark_db, buffer_capacity: 1000, base_level_table_capacity: 2, total_levels: 10, level_size_ratio: 5
+[LSMTree::setupDB] Level 0 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 1 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 2 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 3 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 4 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 5 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 6 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 7 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 8 loaded with 0 SSTables.
+[LSMTree::setupDB] Level 9 loaded with 0 SSTables.
+[LSMTree::setupDB] Database setup complete. Next file ID will be: 1
+[LSMTree] Started 1 flusher and  1 compactor thread.
+[Flusher Thread] Started.
+[Compactor Thread 0x16d00b000] Started.
+Total time to perform workload: 153 seconds. Workload name: ./experiments/put/1GB_put.txt
+[LSMTree] Shutdown requested. Waiting for threads to finish...
+[Flusher Thread] Exiting.
+[LSMTree] Flusher thread joined.
+[Compactor Thread 0x16d00b000] Exiting.
+[LSMTree] Compactor thread joined.
+[LSMTree] Shutdown complete.
+
+real	2m39.133s
+user	6m21.288s
+sys	0m32.522s
