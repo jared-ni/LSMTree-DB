@@ -696,6 +696,14 @@ void LSMTree::setupDB() {
         }
     }
 
+    std::cout << "[LSMTree setup] parameters: " 
+              << "db_path: " << db_path_ 
+              << ", buffer_capacity: " << buffer_capacity_ 
+              << ", base_level_table_capacity: " << base_level_table_capacity_ 
+              << ", total_levels: " << total_levels_ 
+              << ", level_size_ratio: " << level_size_ratio_ 
+              << std::endl;
+
     // configure each level
     int max_loaded_file_id = 0;
     for (size_t i = 0; i < total_levels_; ++i) {
@@ -946,6 +954,8 @@ bool LSMTree::putData(const DataPair& data) {
         std::lock_guard lock(this->flush_mutex_);
         this->flush_needed_ = true;
         flush_request_cv_.notify_one();
+
+        // single-thread baseline
         // this->flushBuffer();
     }
 
@@ -958,52 +968,93 @@ std::optional<DataPair> LSMTree::getData(int key) {
 
     // search buffer first
     // getData locks buffer_mutex_
-    std::optional<DataPair> data_pair = buffer_->getData(key);
-    if (data_pair.has_value()) {
-        if (data_pair.value().deleted_) {
+    // 1. Search buffer first (sequential, highest priority)
+    std::optional<DataPair> data_pair_buffer = buffer_->getData(key);
+    if (data_pair_buffer.has_value()) {
+        if (data_pair_buffer.value().deleted_) {
             return std::nullopt;
         } else {
-            return data_pair;
+            return data_pair_buffer;
         }
     }
-    // search levels next: 
-    // TODO: add bloom filter each level
 
-    for (size_t level_i = 0; level_i < levels_.size(); level_i++) {
-        const auto& cur_level = levels_[level_i];
+    // 2. Prepare for parallel level search
+    std::vector<std::future<std::optional<DataPair>>> level_search_futures;
+    level_search_futures.reserve(levels_.size());
 
-        // TODO: skip level if bloom filter says key not in level
-        // getSSTables locks level_mutex_
-        std::vector<std::shared_ptr<SSTable>> cur_sstables;
-        {
-            std::shared_lock lock(cur_level->level_mutex_);
-            cur_sstables = cur_level->sstables_;
-        }
-        // newer table priority, so we process the new/last tables first
-        std::reverse(cur_sstables.begin(), cur_sstables.end());
-
-        for (const auto& cur_sstable : cur_sstables) {
-            // check range: if not in range, continue
-            if (!cur_sstable->keyInRange(key)) {
-                continue;
-            }
-
-            // check bloom filter
-            if (!cur_sstable->bloom_filter_.might_contain(key)) {
-                continue;
-            }
-
-            // use fence pointers in getDataPair, now that we know it's in it
-            std::optional<DataPair> data_search_res = cur_sstable->getDataPair(key);
-            if (data_search_res.has_value()) {
-                // need to check for tombstone
-                if (data_search_res.value().deleted_) {
+    for (size_t level_idx = 0; level_idx < levels_.size(); ++level_idx) {
+        // Capture level_idx by value for the lambda
+        level_search_futures.push_back(
+            std::async(std::launch::async, [this, key, level_idx]() -> std::optional<DataPair> {
+                // This code will run in a separate thread for each level
+                const auto& current_level_ptr = levels_[level_idx];
+                // It's good practice to check if the unique_ptr holds an object,
+                // though in your current setup, levels_ should always be populated.
+                if (!current_level_ptr) {
+                    // This should ideally not happen if levels_ is initialized correctly.
+                    std::cerr << "[LSMTree::getData] Warning: Level " << level_idx << " pointer is null." << std::endl;
                     return std::nullopt;
                 }
-                return data_search_res;
+
+                std::vector<std::shared_ptr<SSTable>> sstables_in_level;
+                {
+                    // Acquire shared lock to read the sstables list for this level
+                    std::shared_lock lock(current_level_ptr->level_mutex_);
+                    sstables_in_level = current_level_ptr->sstables_;
+                }
+                
+                // Search newer SSTables first within this level
+                std::reverse(sstables_in_level.begin(), sstables_in_level.end());
+
+                for (const auto& sstable_ptr : sstables_in_level) {
+                    if (!sstable_ptr) continue; // Should not happen with shared_ptr
+
+                    // key in SSTable's range
+                    if (!sstable_ptr->keyInRange(key)) {
+                        continue;
+                    }
+
+                    // bloom filter says key could be present
+                    if (!sstable_ptr->bloom_filter_.might_contain(key)) {
+                        continue;
+                    }
+
+                    // actual data lookup (might trigger lazy load, protected by sstable_mutex_)
+                    std::optional<DataPair> sstable_result = sstable_ptr->getDataPair(key);
+                    if (sstable_result.has_value()) {
+                        return sstable_result; 
+                    }
+                }
+                return std::nullopt; 
+            })
+        );
+    }
+
+    // 3. collect results and determine final outcome, respecting level priority
+    for (size_t i = 0; i < level_search_futures.size(); ++i) {
+        if (level_search_futures[i].valid()) {
+            try {
+                // .get() will block until the task for this level is complete
+                std::optional<DataPair> level_result = level_search_futures[i].get(); 
+                
+                if (level_result.has_value()) {
+                    if (level_result.value().deleted_) {
+                        return std::nullopt;
+                    } else {
+                        return level_result;
+                    }
+                }
+                // If std::nullopt, means key not found in this level, continue to check next level's future
+            } catch (const std::future_error& e) {
+                std::cerr << "[LSMTree::getData] Future error on level " << i << " for key " << key << ": " << e.what() << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[LSMTree::getData] Exception getting result from level " << i << " search for key " << key << ": " << e.what() << std::endl;
             }
+        } else {
+             std::cerr << "[LSMTree::getData] Future for level " << i << " was not valid for key " << key << "." << std::endl;
         }
     }
+    // std::cout << "[LSMTree::getData] Key " << key << " not found in buffer or any level." << std::endl;
     return std::nullopt;
 }
 
